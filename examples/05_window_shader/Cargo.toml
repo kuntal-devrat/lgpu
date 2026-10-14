@@ -1,0 +1,13 @@
+[package]
+name = "example-window-shader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Interactive window demo rendering shaders and animated 3D polygons with lgpu"
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
+winit = { version = "0.29", default-features = false, features = ["rwh_06", "x11", "wayland"] }
+softbuffer = "0.4"
+bytemuck = { version = "1.19", features = ["derive"] }

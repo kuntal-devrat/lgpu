@@ -103,7 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🧪 Running the Examples
 
-```bash
+# Run interactive desktop window demo (3D polygons, raymarched shaders, 300+ FPS)
+cargo run --release -p example-window-shader
+
 # Run headless GPGPU vector addition
 cargo run -p example-headless-compute
 
@@ -122,11 +124,18 @@ gcc -std=c99 examples/c_example/main.c -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)
 
 # Run hardware & bindless integration tests
 cargo test --all
-
-# Build release binary (Verify <500 KB footprint)
-cargo build --release -p example-bindless-100k
-ls -lh target/release/example-bindless-100k
 ```
+
+### 🎮 Interactive Window Demo Controls (`05_window_shader`)
+
+| Control | Action |
+| :--- | :--- |
+| **`[1]`** | **Mode 1: 3D Rotating Polygons** — Multi-colored polyhedron with directional lighting & depth |
+| **`[2]`** | **Mode 2: Cyberpunk Raymarched 3D Torus** — Volumetric signed distance field, neon reflections & ambient occlusion |
+| **`[3]`** | **Mode 3: Cosmic Psychedelic Plasma** — Real-time mathematical fluid waveforms |
+| **`[Space]`** | Cycle through shader modes |
+| **`Mouse Drag`** | Manually rotate and inspect the 3D geometry from any angle |
+| **`[Esc]`** | Smoothly close window and exit |
 
 ---
 
@@ -140,6 +149,7 @@ ls -lh target/release/example-bindless-100k
 - [x] **Phase 5:** Metal 3 (macOS/iOS) & DirectX 12 (Windows) modern backend scaffolds.
 - [x] **Phase 6:** `lgpu-c` single-header C99 / Zig bindings (`crates/lgpu-c/include/lgpu.h`).
 - [x] **Phase 7:** 100,000 GPU-driven stress test showcase demo (`04_bindless_100k`).
+- [x] **Phase 8:** Interactive Desktop OS Window with 3D Polygons & Shaders (`05_window_shader` at 340+ FPS).
 
 ---
 

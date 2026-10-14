@@ -963,11 +963,13 @@ impl VulkanDevice {
         Ok(pipelines[0])
     }
 
-    pub fn cmd_draw_triangle(
+    pub fn cmd_draw(
         &self,
         recorder: &VulkanCommandRecorder,
         texture: &VulkanTexture,
         pipeline: vk::Pipeline,
+        vertex_count: u32,
+        push_constants: &[u8],
         clear_color: [f32; 4],
     ) {
         let heap = match &self.bindless_heap {
@@ -1061,7 +1063,16 @@ impl VulkanDevice {
                 &[heap.descriptor_set],
                 &[],
             );
-            self.device.cmd_draw(recorder.command_buffer, 3, 1, 0, 0);
+            if !push_constants.is_empty() {
+                self.device.cmd_push_constants(
+                    recorder.command_buffer,
+                    heap.pipeline_layout,
+                    vk::ShaderStageFlags::ALL,
+                    0,
+                    push_constants,
+                );
+            }
+            self.device.cmd_draw(recorder.command_buffer, vertex_count, 1, 0, 0);
 
             self.device.cmd_end_rendering(recorder.command_buffer);
 
@@ -1085,6 +1096,16 @@ impl VulkanDevice {
                 &[barrier_to_src],
             );
         }
+    }
+
+    pub fn cmd_draw_triangle(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        texture: &VulkanTexture,
+        pipeline: vk::Pipeline,
+        clear_color: [f32; 4],
+    ) {
+        self.cmd_draw(recorder, texture, pipeline, 3, &[], clear_color);
     }
 
     pub fn dispatch(

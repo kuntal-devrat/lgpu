@@ -439,23 +439,36 @@ impl CommandEncoder {
         }
     }
 
-    pub fn render_triangle(
+    pub fn draw(
         &mut self,
         texture: &Texture,
         pipeline: &GraphicsPipeline,
+        vertex_count: u32,
+        push_constants: &[u8],
         clear_color: [f32; 4],
     ) {
         #[cfg(feature = "vulkan")]
         {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.cmd_draw_triangle(
+            self.vulkan_device.cmd_draw(
                 recorder,
                 raw_tex,
                 pipeline.pipeline,
+                vertex_count,
+                push_constants,
                 clear_color,
             );
         }
+    }
+
+    pub fn render_triangle(
+        &mut self,
+        texture: &Texture,
+        pipeline: &GraphicsPipeline,
+        clear_color: [f32; 4],
+    ) {
+        self.draw(texture, pipeline, 3, &[], clear_color);
     }
 
     pub fn copy_texture_to_buffer(
