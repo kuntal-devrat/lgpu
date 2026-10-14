@@ -1,0 +1,19 @@
+[package]
+name = "lgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ultra-lightweight, bindless-first cross-platform GPU abstraction"
+
+[features]
+default = ["vulkan"]
+vulkan = ["lgpu-hal/vulkan"]
+metal = ["lgpu-hal/metal"]
+d3d12 = ["lgpu-hal/d3d12"]
+
+[dependencies]
+lgpu-hal = { path = "../lgpu-hal", default-features = false }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+raw-window-handle = { workspace = true, optional = true }

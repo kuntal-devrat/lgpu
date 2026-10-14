@@ -1,0 +1,19 @@
+[package]
+name = "lgpu-hal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Micro hardware abstraction layer for lgpu"
+
+[features]
+default = ["vulkan"]
+vulkan = ["dep:ash"]
+metal = []
+d3d12 = []
+
+[dependencies]
+ash = { workspace = true, optional = true }
+bitflags = { workspace = true }
+thiserror = { workspace = true }
+raw-window-handle = { workspace = true, optional = true }
+tracing = { workspace = true }

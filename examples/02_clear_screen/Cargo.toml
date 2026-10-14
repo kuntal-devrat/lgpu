@@ -1,0 +1,8 @@
+[package]
+name = "example-clear-screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
