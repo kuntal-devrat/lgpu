@@ -87,6 +87,13 @@ pub struct BindlessComputePipeline {
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
 }
 
+pub struct GraphicsPipeline {
+    #[cfg(feature = "vulkan")]
+    pub(crate) pipeline: lgpu_hal::vulkan::RawPipeline,
+    #[cfg(feature = "vulkan")]
+    pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+}
+
 pub struct CommandEncoder {
     #[cfg(feature = "vulkan")]
     pub(crate) recorder: Option<lgpu_hal::vulkan::VulkanCommandRecorder>,
@@ -246,6 +253,29 @@ impl Device {
         }
     }
 
+    pub fn create_graphics_pipeline(
+        &self,
+        shader: &Shader,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: TextureFormat,
+    ) -> Result<GraphicsPipeline, Error> {
+        #[cfg(feature = "vulkan")]
+        {
+            let raw_shader = shader.hal_shader.as_ref().unwrap();
+            let pipeline = self.vulkan_device.create_graphics_pipeline(
+                raw_shader,
+                vs_entry,
+                fs_entry,
+                color_format,
+            )?;
+            Ok(GraphicsPipeline {
+                pipeline,
+                vulkan_device: Arc::clone(&self.vulkan_device),
+            })
+        }
+    }
+
     pub fn create_command_encoder(&self) -> Result<CommandEncoder, Error> {
         #[cfg(feature = "vulkan")]
         {
@@ -338,6 +368,15 @@ impl Drop for BindlessComputePipeline {
     }
 }
 
+impl Drop for GraphicsPipeline {
+    fn drop(&mut self) {
+        #[cfg(feature = "vulkan")]
+        {
+            self.vulkan_device.destroy_raw_pipeline(self.pipeline);
+        }
+    }
+}
+
 impl CommandEncoder {
     pub fn dispatch_compute(
         &mut self,
@@ -397,6 +436,25 @@ impl CommandEncoder {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
             self.vulkan_device.cmd_clear_and_render(recorder, raw_tex, clear_color);
+        }
+    }
+
+    pub fn render_triangle(
+        &mut self,
+        texture: &Texture,
+        pipeline: &GraphicsPipeline,
+        clear_color: [f32; 4],
+    ) {
+        #[cfg(feature = "vulkan")]
+        {
+            let recorder = self.recorder.as_ref().unwrap();
+            let raw_tex = texture.hal_texture.as_ref().unwrap();
+            self.vulkan_device.cmd_draw_triangle(
+                recorder,
+                raw_tex,
+                pipeline.pipeline,
+                clear_color,
+            );
         }
     }
 

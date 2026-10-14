@@ -867,6 +867,226 @@ impl VulkanDevice {
         }
     }
 
+    pub fn create_graphics_pipeline(
+        &self,
+        shader: &VulkanShader,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: TextureFormat,
+    ) -> Result<vk::Pipeline, HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+
+        let vk_format = match color_format {
+            TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            TextureFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
+            TextureFormat::Bgra8Unorm => vk::Format::B8G8R8A8_UNORM,
+            TextureFormat::Bgra8Srgb => vk::Format::B8G8R8A8_SRGB,
+            TextureFormat::R32Float => vk::Format::R32_SFLOAT,
+            TextureFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+            TextureFormat::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
+            TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
+        };
+
+        let vs_name = CString::new(vs_entry).unwrap();
+        let fs_name = CString::new(fs_entry).unwrap();
+
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(shader.module)
+                .name(&vs_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(shader.module)
+                .name(&fs_name),
+        ];
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&dynamic_states);
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let color_blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachment);
+
+        let color_formats = [vk_format];
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats);
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_info)
+            .layout(heap.pipeline_layout)
+            .push_next(&mut rendering_info);
+
+        let pipelines = unsafe {
+            self.device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .map_err(|(_, e)| HalError::PipelineError(format!("create_graphics_pipelines failed: {e}")))?
+        };
+
+        Ok(pipelines[0])
+    }
+
+    pub fn cmd_draw_triangle(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        texture: &VulkanTexture,
+        pipeline: vk::Pipeline,
+        clear_color: [f32; 4],
+    ) {
+        let heap = match &self.bindless_heap {
+            Some(h) => h,
+            None => return,
+        };
+
+        unsafe {
+            let subresource_range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1);
+
+            let barrier_to_attach = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(texture.image)
+                .subresource_range(subresource_range)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+
+            self.device.cmd_pipeline_barrier(
+                recorder.command_buffer,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_attach],
+            );
+
+            let clear_value = vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: clear_color,
+                },
+            };
+
+            let color_attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(texture.view)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .clear_value(clear_value);
+
+            let color_attachments = [color_attachment];
+            let render_area = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: texture.width,
+                    height: texture.height,
+                },
+            };
+
+            let rendering_info = vk::RenderingInfo::default()
+                .render_area(render_area)
+                .layer_count(1)
+                .color_attachments(&color_attachments);
+
+            self.device
+                .cmd_begin_rendering(recorder.command_buffer, &rendering_info);
+
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: texture.width as f32,
+                height: texture.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            self.device
+                .cmd_set_viewport(recorder.command_buffer, 0, &[viewport]);
+
+            let scissor = render_area;
+            self.device
+                .cmd_set_scissor(recorder.command_buffer, 0, &[scissor]);
+
+            self.device.cmd_bind_pipeline(
+                recorder.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline,
+            );
+            self.device.cmd_bind_descriptor_sets(
+                recorder.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                heap.pipeline_layout,
+                0,
+                &[heap.descriptor_set],
+                &[],
+            );
+            self.device.cmd_draw(recorder.command_buffer, 3, 1, 0, 0);
+
+            self.device.cmd_end_rendering(recorder.command_buffer);
+
+            let barrier_to_src = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(texture.image)
+                .subresource_range(subresource_range)
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+            self.device.cmd_pipeline_barrier(
+                recorder.command_buffer,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_src],
+            );
+        }
+    }
+
     pub fn dispatch(
         &self,
         recorder: &VulkanCommandRecorder,
