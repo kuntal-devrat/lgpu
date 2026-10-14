@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="lgpu Logo" width="220" />
+  <img src="assets/logo_banner.png" alt="lgpu Logo Banner" width="480" />
 </p>
 
 # ⚡ `lgpu` (Lean GPU)
