@@ -113,6 +113,9 @@ cargo run -p example-clear-screen
 # Run dynamic rendering triangle rasterization (zero vertex buffers!)
 cargo run -p example-bindless-triangle
 
+# Run 100,000 GPU particles physics simulation stress test
+cargo run -p example-bindless-100k
+
 # Compile and run the standalone pure C99 program
 gcc -std=c99 examples/c_example/main.c -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o target/debug/c_example
 ./target/debug/c_example
@@ -121,8 +124,8 @@ gcc -std=c99 examples/c_example/main.c -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)
 cargo test --all
 
 # Build release binary (Verify <500 KB footprint)
-cargo build --release -p example-bindless-triangle
-ls -lh target/release/example-bindless-triangle
+cargo build --release -p example-bindless-100k
+ls -lh target/release/example-bindless-100k
 ```
 
 ---
@@ -134,9 +137,9 @@ ls -lh target/release/example-bindless-triangle
 - [x] **Phase 2:** Headless compute pipeline, memory mapping & buffer readback.
 - [x] **Phase 3:** Global Bindless Resource Heap (unbounded descriptor array indexing).
 - [x] **Phase 4:** Modern Dynamic Rendering (`VK_KHR_dynamic_rendering` without RenderPasses).
-- [ ] **Phase 5:** Metal 3 (macOS/iOS) backend via direct Objective-C runtime calls.
+- [x] **Phase 5:** Metal 3 (macOS/iOS) & DirectX 12 (Windows) modern backend scaffolds.
 - [x] **Phase 6:** `lgpu-c` single-header C99 / Zig bindings (`crates/lgpu-c/include/lgpu.h`).
-- [ ] **Phase 7:** 100,000 GPU-driven draw calls showcase demo.
+- [x] **Phase 7:** 100,000 GPU-driven stress test showcase demo (`04_bindless_100k`).
 
 ---
 
