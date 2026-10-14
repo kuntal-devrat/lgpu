@@ -20,8 +20,14 @@ pub struct VulkanBindlessHeap {
     pub max_buffers: u32,
     pub max_textures: u32,
     pub max_samplers: u32,
-    free_buffer_slots: Mutex<Vec<u32>>,
-    next_buffer_slot: Mutex<u32>,
+    buffer_slots: Mutex<SlotPool>,
+    texture_slots: Mutex<SlotPool>,
+    sampler_slots: Mutex<SlotPool>,
+}
+
+struct SlotPool {
+    free: Vec<u32>,
+    next: u32,
 }
 
 impl VulkanBindlessHeap {
@@ -133,28 +139,37 @@ impl VulkanBindlessHeap {
             max_buffers,
             max_textures,
             max_samplers,
-            free_buffer_slots: Mutex::new(Vec::new()),
-            next_buffer_slot: Mutex::new(0),
+            buffer_slots: Mutex::new(SlotPool {
+                free: Vec::new(),
+                next: 0,
+            }),
+            texture_slots: Mutex::new(SlotPool {
+                free: Vec::new(),
+                next: 0,
+            }),
+            sampler_slots: Mutex::new(SlotPool {
+                free: Vec::new(),
+                next: 0,
+            }),
         })
     }
 
     pub fn allocate_buffer_slot(&self) -> Result<u32, HalError> {
-        let mut free = self.free_buffer_slots.lock().unwrap();
-        if let Some(slot) = free.pop() {
+        let mut pool = self.buffer_slots.lock().unwrap();
+        if let Some(slot) = pool.free.pop() {
             return Ok(slot);
         }
-        let mut next = self.next_buffer_slot.lock().unwrap();
-        if *next >= self.max_buffers {
+        if pool.next >= self.max_buffers {
             return Err(HalError::OutOfMemory("Exceeded max bindless buffer capacity".to_string()));
         }
-        let slot = *next;
-        *next += 1;
+        let slot = pool.next;
+        pool.next += 1;
         Ok(slot)
     }
 
     pub fn free_buffer_slot(&self, slot: u32) {
-        let mut free = self.free_buffer_slots.lock().unwrap();
-        free.push(slot);
+        let mut pool = self.buffer_slots.lock().unwrap();
+        pool.free.push(slot);
     }
 
     pub fn write_buffer_descriptor(
@@ -181,6 +196,86 @@ impl VulkanBindlessHeap {
         }
     }
 
+    pub fn allocate_texture_slot(&self) -> Result<u32, HalError> {
+        let mut pool = self.texture_slots.lock().unwrap();
+        if let Some(slot) = pool.free.pop() {
+            return Ok(slot);
+        }
+        if pool.next >= self.max_textures {
+            return Err(HalError::OutOfMemory("Exceeded max bindless texture capacity".to_string()));
+        }
+        let slot = pool.next;
+        pool.next += 1;
+        Ok(slot)
+    }
+
+    pub fn free_texture_slot(&self, slot: u32) {
+        let mut pool = self.texture_slots.lock().unwrap();
+        pool.free.push(slot);
+    }
+
+    pub fn write_texture_descriptor(
+        &self,
+        device: &ash::Device,
+        slot: u32,
+        image_view: vk::ImageView,
+        image_layout: vk::ImageLayout,
+    ) {
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(image_view)
+            .image_layout(image_layout);
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.descriptor_set)
+            .dst_binding(1)
+            .dst_array_element(slot)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .image_info(std::slice::from_ref(&image_info));
+
+        unsafe {
+            device.update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    pub fn allocate_sampler_slot(&self) -> Result<u32, HalError> {
+        let mut pool = self.sampler_slots.lock().unwrap();
+        if let Some(slot) = pool.free.pop() {
+            return Ok(slot);
+        }
+        if pool.next >= self.max_samplers {
+            return Err(HalError::OutOfMemory("Exceeded max bindless sampler capacity".to_string()));
+        }
+        let slot = pool.next;
+        pool.next += 1;
+        Ok(slot)
+    }
+
+    pub fn free_sampler_slot(&self, slot: u32) {
+        let mut pool = self.sampler_slots.lock().unwrap();
+        pool.free.push(slot);
+    }
+
+    pub fn write_sampler_descriptor(
+        &self,
+        device: &ash::Device,
+        slot: u32,
+        sampler: vk::Sampler,
+    ) {
+        let sampler_info = vk::DescriptorImageInfo::default()
+            .sampler(sampler);
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.descriptor_set)
+            .dst_binding(2)
+            .dst_array_element(slot)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
+            .image_info(std::slice::from_ref(&sampler_info));
+
+        unsafe {
+            device.update_descriptor_sets(&[write], &[]);
+        }
+    }
+
     pub fn destroy(&self, device: &ash::Device) {
         unsafe {
             device.destroy_descriptor_pool(self.descriptor_pool, None);
@@ -189,3 +284,4 @@ impl VulkanBindlessHeap {
         }
     }
 }
+

@@ -1,17 +1,16 @@
 //! # lgpu Interactive Window Demo
 //!
 //! Renders live animated 3D polygons, procedural raymarched shaders, and dynamic
-//! geometric visuals using Vulkan 1.3 Dynamic Rendering and the Lean GPU (lgpu) abstraction.
+//! geometric visuals using native Vulkan 1.3 Swapchain and the Lean GPU (lgpu) abstraction.
 
 mod shaders;
 
-use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 
 use lgpu::{
-    BufferDesc, BufferUsage, Device, GraphicsPipeline, Instance, MemoryLocation, Queue, Texture,
-    TextureDesc, TextureFormat, TextureUsage,
+    Device, GraphicsPipeline, Instance, PresentMode, Queue, Surface, SurfaceConfiguration,
+    TextureFormat, TextureUsage,
 };
 use winit::{
     dpi::LogicalSize,
@@ -37,23 +36,36 @@ struct PushConstants {
 struct RenderState {
     device: Device,
     queue: Queue,
+    surface: Surface,
     polygon_pipeline: GraphicsPipeline,
     procedural_pipeline: GraphicsPipeline,
-    render_target: Texture,
-    readback_buffer: lgpu::Buffer,
-    pixel_bytes: Vec<u8>,
     width: u32,
     height: u32,
 }
 
 impl RenderState {
-    fn new(device: Device, queue: Queue, width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(
+        device: Device,
+        queue: Queue,
+        mut surface: Surface,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = SurfaceConfiguration {
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            format: TextureFormat::Bgra8Unorm,
+            width,
+            height,
+            present_mode: PresentMode::Mailbox,
+        };
+        surface.configure(&device, &config)?;
+
         let polygon_shader = device.create_shader_spirv(shaders::POLYGON_3D_SPV)?;
         let polygon_pipeline = device.create_graphics_pipeline(
             &polygon_shader,
             "vs_main",
             "fs_main",
-            TextureFormat::Rgba8Unorm,
+            TextureFormat::Bgra8Unorm,
         )?;
 
         let procedural_shader = device.create_shader_spirv(shaders::PROCEDURAL_SHADER_SPV)?;
@@ -61,64 +73,34 @@ impl RenderState {
             &procedural_shader,
             "vs_main",
             "fs_main",
-            TextureFormat::Rgba8Unorm,
+            TextureFormat::Bgra8Unorm,
         )?;
-
-        let (render_target, readback_buffer, pixel_bytes) =
-            Self::create_targets(&device, width, height)?;
 
         Ok(Self {
             device,
             queue,
+            surface,
             polygon_pipeline,
             procedural_pipeline,
-            render_target,
-            readback_buffer,
-            pixel_bytes,
             width,
             height,
         })
     }
 
-    fn create_targets(
-        device: &Device,
-        width: u32,
-        height: u32,
-    ) -> Result<(Texture, lgpu::Buffer, Vec<u8>), Box<dyn std::error::Error>> {
-        let target_desc = TextureDesc {
-            label: Some("RenderTarget"),
-            width,
-            height,
-            depth: 1,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
-        };
-        let render_target = device.create_texture(&target_desc)?;
-
-        let num_pixels = (width * height) as usize;
-        let buf_desc = BufferDesc {
-            label: Some("ReadbackBuffer"),
-            size: (num_pixels * 4) as u64,
-            usage: BufferUsage::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuToCpu,
-        };
-        let readback_buffer = device.create_buffer(&buf_desc)?;
-        let pixel_bytes = vec![0u8; num_pixels * 4];
-
-        Ok((render_target, readback_buffer, pixel_bytes))
-    }
-
     fn resize(&mut self, new_width: u32, new_height: u32) -> Result<(), Box<dyn std::error::Error>> {
-        if new_width == self.width && new_height == self.height || new_width == 0 || new_height == 0 {
+        if new_width == 0 || new_height == 0 || (new_width == self.width && new_height == self.height) {
             return Ok(());
         }
         self.width = new_width;
         self.height = new_height;
-        let (render_target, readback_buffer, pixel_bytes) =
-            Self::create_targets(&self.device, new_width, new_height)?;
-        self.render_target = render_target;
-        self.readback_buffer = readback_buffer;
-        self.pixel_bytes = pixel_bytes;
+        let config = SurfaceConfiguration {
+            usage: TextureUsage::RENDER_ATTACHMENT,
+            format: TextureFormat::Bgra8Unorm,
+            width: new_width,
+            height: new_height,
+            present_mode: PresentMode::Mailbox,
+        };
+        self.surface.configure(&self.device, &config)?;
         Ok(())
     }
 
@@ -126,13 +108,28 @@ impl RenderState {
         &mut self,
         pc: &PushConstants,
         mode: u32,
-    ) -> Result<&[u8], Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(_) => {
+                let config = SurfaceConfiguration {
+                    usage: TextureUsage::RENDER_ATTACHMENT,
+                    format: TextureFormat::Bgra8Unorm,
+                    width: self.width,
+                    height: self.height,
+                    present_mode: PresentMode::Mailbox,
+                };
+                self.surface.configure(&self.device, &config)?;
+                self.surface.get_current_texture()?
+            }
+        };
+
         let mut encoder = self.device.create_command_encoder()?;
 
         if mode == 0 {
             // Mode 0: 3D Animated Shaded Polygons (Cube/Prism, 36 vertices)
             encoder.draw(
-                &self.render_target,
+                &frame.texture,
                 &self.polygon_pipeline,
                 36,
                 bytemuck::bytes_of(pc),
@@ -142,7 +139,7 @@ impl RenderState {
             // Mode 1: 3D Raymarched Neon Torus
             // Mode 2: Cosmic Psychedelic Plasma Waveform
             encoder.draw(
-                &self.render_target,
+                &frame.texture,
                 &self.procedural_pipeline,
                 3,
                 bytemuck::bytes_of(pc),
@@ -150,11 +147,9 @@ impl RenderState {
             );
         }
 
-        encoder.copy_texture_to_buffer(&self.render_target, &self.readback_buffer);
-        self.queue.submit(encoder.finish())?;
-
-        self.readback_buffer.read(&mut self.pixel_bytes)?;
-        Ok(&self.pixel_bytes)
+        encoder.transition_to_present(&frame.texture);
+        self.queue.submit_surface(encoder.finish(), frame)?;
+        Ok(())
     }
 }
 
@@ -187,15 +182,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build(&event_loop)?,
     );
 
-    let context = softbuffer::Context::new(window.clone())
-        .map_err(|e| format!("softbuffer Context creation failed: {e}"))?;
-    let mut surface = softbuffer::Surface::new(&context, window.clone())
-        .map_err(|e| format!("softbuffer Surface creation failed: {e}"))?;
-
+    let surface = instance.create_surface(&window)?;
     let initial_size = window.inner_size();
     let mut render_state = RenderState::new(
         device,
         queue,
+        surface,
         initial_size.width.max(1),
         initial_size.height.max(1),
     )?;
@@ -230,17 +222,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Poll);
 
-        match event {
-            Event::WindowEvent { event, .. } => match event {
+        if let Event::WindowEvent { event, .. } = event {
+            match event {
                 WindowEvent::CloseRequested => elwt.exit(),
                 WindowEvent::Resized(physical_size) => {
                     let w = physical_size.width.max(1);
                     let h = physical_size.height.max(1);
                     if let Err(e) = render_state.resize(w, h) {
                         eprintln!("Resize error: {e}");
-                    }
-                    if let (Some(nw), Some(nh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
-                        surface.resize(nw, nh).ok();
                     }
                     window.request_redraw();
                 }
@@ -339,35 +328,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         param2: 0.0,
                     };
 
-                    match render_state.render(&pc, current_mode) {
-                        Ok(pixels) => {
-                            if let (Some(nw), Some(nh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
-                                surface.resize(nw, nh).ok();
-                                if let Ok(mut buffer) = surface.buffer_mut() {
-                                    let buf_len = buffer.len();
-                                    let num_pixels = (w * h) as usize;
-                                    let copy_count = buf_len.min(num_pixels);
-
-                                    for i in 0..copy_count {
-                                        let r = pixels[i * 4 + 0] as u32;
-                                        let g = pixels[i * 4 + 1] as u32;
-                                        let b = pixels[i * 4 + 2] as u32;
-                                        buffer[i] = (r << 16) | (g << 8) | b;
-                                    }
-                                    buffer.present().ok();
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Render error: {e}");
-                        }
+                    if let Err(e) = render_state.render(&pc, current_mode) {
+                        eprintln!("Render error: {e}");
                     }
 
                     window.request_redraw();
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         }
     })?;
 

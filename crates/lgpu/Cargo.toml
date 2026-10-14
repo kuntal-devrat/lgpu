@@ -16,4 +16,4 @@ lgpu-hal = { path = "../lgpu-hal", default-features = false }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-raw-window-handle = { workspace = true, optional = true }
+raw-window-handle = { workspace = true }

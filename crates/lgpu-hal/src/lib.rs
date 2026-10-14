@@ -102,6 +102,45 @@ pub struct TextureDesc<'a> {
     pub usage: TextureUsage,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterMode {
+    Nearest,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressMode {
+    ClampToEdge,
+    Repeat,
+    MirrorRepeat,
+}
+
+#[derive(Debug, Clone)]
+pub struct SamplerDesc<'a> {
+    pub label: Option<&'a str>,
+    pub min_filter: FilterMode,
+    pub mag_filter: FilterMode,
+    pub mipmap_filter: FilterMode,
+    pub address_mode_u: AddressMode,
+    pub address_mode_v: AddressMode,
+    pub address_mode_w: AddressMode,
+}
+
+impl Default for SamplerDesc<'_> {
+    fn default() -> Self {
+        Self {
+            label: None,
+            min_filter: FilterMode::Linear,
+            mag_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Linear,
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+        }
+    }
+}
+
+
 #[derive(thiserror::Error, Debug)]
 pub enum HalError {
     #[error("Dynamic loader failed to load driver library: {0}")]

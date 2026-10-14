@@ -15,5 +15,5 @@ d3d12 = []
 ash = { workspace = true, optional = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
-raw-window-handle = { workspace = true, optional = true }
+raw-window-handle = { workspace = true }
 tracing = { workspace = true }

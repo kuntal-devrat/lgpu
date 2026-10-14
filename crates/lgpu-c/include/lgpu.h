@@ -25,6 +25,25 @@ typedef struct lgpu_shader_s*   lgpu_shader_t;
 typedef struct lgpu_compute_pipeline_s* lgpu_compute_pipeline_t;
 typedef struct lgpu_command_encoder_s* lgpu_command_encoder_t;
 typedef struct lgpu_command_buffer_s*  lgpu_command_buffer_t;
+typedef struct lgpu_timeline_semaphore_s* lgpu_timeline_semaphore_t;
+typedef struct lgpu_texture_s*         lgpu_texture_t;
+typedef struct lgpu_sampler_s*         lgpu_sampler_t;
+typedef struct lgpu_graphics_pipeline_s* lgpu_graphics_pipeline_t;
+typedef struct lgpu_bindless_compute_pipeline_s* lgpu_bindless_compute_pipeline_t;
+
+typedef struct lgpu_adapter_info {
+    char name[256];
+    uint32_t backend;
+    uint32_t device_type;
+    uint32_t vendor_id;
+    uint32_t device_id;
+    bool supports_dynamic_rendering;
+    bool supports_timeline_semaphores;
+    bool supports_descriptor_indexing;
+    uint32_t max_compute_workgroup_invocations;
+    uint32_t max_compute_workgroup_size[3];
+} lgpu_adapter_info_t;
+
 
 /* === Enums === */
 typedef enum lgpu_result {
@@ -54,6 +73,38 @@ enum lgpu_buffer_usage {
 };
 typedef uint32_t lgpu_buffer_usage_t;
 
+typedef enum lgpu_texture_format {
+    LGPU_FORMAT_RGBA8_UNORM = 0,
+    LGPU_FORMAT_RGBA8_SRGB = 1,
+    LGPU_FORMAT_BGRA8_UNORM = 2,
+    LGPU_FORMAT_BGRA8_SRGB = 3,
+    LGPU_FORMAT_R32_FLOAT = 4,
+    LGPU_FORMAT_RGBA16_FLOAT = 5,
+    LGPU_FORMAT_RGBA32_FLOAT = 6,
+    LGPU_FORMAT_DEPTH32_FLOAT = 7,
+} lgpu_texture_format_t;
+
+enum lgpu_texture_usage {
+    LGPU_TEX_USAGE_COPY_SRC          = 1 << 0,
+    LGPU_TEX_USAGE_COPY_DST          = 1 << 1,
+    LGPU_TEX_USAGE_TEXTURE_BINDING   = 1 << 2,
+    LGPU_TEX_USAGE_STORAGE_BINDING   = 1 << 3,
+    LGPU_TEX_USAGE_RENDER_ATTACHMENT = 1 << 4,
+};
+typedef uint32_t lgpu_texture_usage_t;
+
+typedef enum lgpu_filter_mode {
+    LGPU_FILTER_NEAREST = 0,
+    LGPU_FILTER_LINEAR = 1,
+} lgpu_filter_mode_t;
+
+typedef enum lgpu_address_mode {
+    LGPU_ADDRESS_CLAMP_TO_EDGE = 0,
+    LGPU_ADDRESS_REPEAT = 1,
+    LGPU_ADDRESS_MIRROR_REPEAT = 2,
+} lgpu_address_mode_t;
+
+
 /* === API Functions === */
 
 /** Returns the lgpu ABI version */
@@ -67,6 +118,13 @@ uint32_t lgpu_get_adapter_count(lgpu_instance_t instance);
 
 /** Get adapter name */
 const char* lgpu_get_adapter_name(lgpu_instance_t instance, uint32_t index);
+
+/** Get detailed adapter hardware capabilities */
+lgpu_result_t lgpu_get_adapter_info(
+    lgpu_instance_t instance,
+    uint32_t index,
+    lgpu_adapter_info_t* out_info
+);
 
 /** Request logical device and queue */
 lgpu_result_t lgpu_create_device(
@@ -84,6 +142,17 @@ lgpu_result_t lgpu_create_buffer(
     lgpu_memory_location_t location,
     lgpu_buffer_t* out_buffer
 );
+
+/** Create a GPU buffer initialized with host memory */
+lgpu_result_t lgpu_create_buffer_init(
+    lgpu_device_t device,
+    const void* data,
+    size_t size,
+    lgpu_buffer_usage_t usage,
+    lgpu_memory_location_t location,
+    lgpu_buffer_t* out_buffer
+);
+
 
 /** Get bindless slot ID for a buffer (-1 if none) */
 int32_t lgpu_buffer_get_bindless_id(lgpu_buffer_t buffer);
@@ -144,10 +213,192 @@ lgpu_result_t lgpu_queue_submit(
     lgpu_command_buffer_t command_buffer
 );
 
+/** Submit multiple command buffers atomically and wait for completion */
+lgpu_result_t lgpu_queue_submit_batches(
+    lgpu_queue_t queue,
+    const lgpu_command_buffer_t* command_buffers,
+    uint32_t count
+);
+
+/** Asynchronously submit command buffers with timeline semaphore dependencies */
+lgpu_result_t lgpu_queue_submit_async(
+    lgpu_queue_t queue,
+    const lgpu_command_buffer_t* command_buffers,
+    uint32_t count,
+    const lgpu_timeline_semaphore_t* wait_semaphores,
+    const uint64_t* wait_values,
+    uint32_t wait_count,
+    const lgpu_timeline_semaphore_t* signal_semaphores,
+    const uint64_t* signal_values,
+    uint32_t signal_count
+);
+
+/** Create a timeline semaphore */
+lgpu_result_t lgpu_create_timeline_semaphore(
+    lgpu_device_t device,
+    uint64_t initial_value,
+    lgpu_timeline_semaphore_t* out_semaphore
+);
+
+/** Get current value of timeline semaphore */
+lgpu_result_t lgpu_get_timeline_semaphore_value(
+    lgpu_timeline_semaphore_t semaphore,
+    uint64_t* out_value
+);
+
+/** Wait on host for timeline semaphore to reach value (timeout in nanoseconds, UINT64_MAX for infinite) */
+lgpu_result_t lgpu_wait_timeline_semaphore(
+    lgpu_timeline_semaphore_t semaphore,
+    uint64_t value,
+    uint64_t timeout_nanos
+);
+
+/** Signal timeline semaphore from host with value */
+lgpu_result_t lgpu_signal_timeline_semaphore(
+    lgpu_timeline_semaphore_t semaphore,
+    uint64_t value
+);
+
+/** Record global GPU execution and memory barrier */
+void lgpu_encoder_memory_barrier(lgpu_command_encoder_t encoder);
+
+/** Record GPU buffer memory barrier */
+void lgpu_encoder_buffer_barrier(
+    lgpu_command_encoder_t encoder,
+    lgpu_buffer_t buffer
+);
+
+/** Create a GPU texture */
+lgpu_result_t lgpu_create_texture(
+    lgpu_device_t device,
+    uint32_t width,
+    uint32_t height,
+    uint32_t depth,
+    lgpu_texture_format_t format,
+    lgpu_texture_usage_t usage,
+    lgpu_texture_t* out_texture
+);
+
+/** Get bindless slot ID for a texture (-1 if none) */
+int32_t lgpu_texture_get_bindless_id(lgpu_texture_t texture);
+
+/** Create a GPU sampler */
+lgpu_result_t lgpu_create_sampler(
+    lgpu_device_t device,
+    lgpu_filter_mode_t min_filter,
+    lgpu_filter_mode_t mag_filter,
+    lgpu_filter_mode_t mipmap_filter,
+    lgpu_address_mode_t address_u,
+    lgpu_address_mode_t address_v,
+    lgpu_address_mode_t address_w,
+    lgpu_sampler_t* out_sampler
+);
+
+/** Get bindless slot ID for a sampler (-1 if none) */
+int32_t lgpu_sampler_get_bindless_id(lgpu_sampler_t sampler);
+
+/** Create a graphics pipeline with optional depth testing */
+lgpu_result_t lgpu_create_graphics_pipeline(
+    lgpu_device_t device,
+    lgpu_shader_t shader,
+    const char* vs_entry,
+    const char* fs_entry,
+    lgpu_texture_format_t color_format,
+    int32_t depth_format, /* -1 if no depth attachment */
+    bool depth_test,
+    bool depth_write,
+    lgpu_graphics_pipeline_t* out_pipeline
+);
+
+/** Clear color and depth attachments */
+void lgpu_clear_and_render_with_depth(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t color_texture,
+    lgpu_texture_t depth_texture,
+    const float clear_color[4],
+    float clear_depth
+);
+
+/** Draw primitives with depth attachment */
+void lgpu_draw_with_depth(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t color_texture,
+    lgpu_texture_t depth_texture,
+    lgpu_graphics_pipeline_t pipeline,
+    uint32_t vertex_count,
+    const void* push_constants,
+    size_t push_constants_size,
+    const float clear_color[4],
+    float clear_depth
+);
+
+/** Clear color texture */
+void lgpu_clear_and_render_texture(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t texture,
+    const float clear_color[4]
+);
+
+/** Draw primitives to color texture */
+void lgpu_draw(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t texture,
+    lgpu_graphics_pipeline_t pipeline,
+    uint32_t vertex_count,
+    const void* push_constants,
+    size_t push_constants_size,
+    const float clear_color[4]
+);
+
+/** Draw single 3-vertex triangle to color texture */
+void lgpu_render_triangle(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t texture,
+    lgpu_graphics_pipeline_t pipeline,
+    const float clear_color[4]
+);
+
+/** Copy texture memory to buffer */
+void lgpu_copy_texture_to_buffer(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t texture,
+    lgpu_buffer_t buffer
+);
+
+/** Get texture width */
+uint32_t lgpu_texture_get_width(lgpu_texture_t texture);
+
+/** Get texture height */
+uint32_t lgpu_texture_get_height(lgpu_texture_t texture);
+
+/** Get texture format */
+int32_t lgpu_texture_get_format(lgpu_texture_t texture);
+
+/** Create a bindless compute pipeline */
+lgpu_result_t lgpu_create_bindless_compute_pipeline(
+    lgpu_device_t device,
+    lgpu_shader_t shader,
+    lgpu_bindless_compute_pipeline_t* out_pipeline
+);
+
+/** Record a bindless compute dispatch */
+lgpu_result_t lgpu_dispatch_bindless_compute(
+    lgpu_command_encoder_t encoder,
+    lgpu_bindless_compute_pipeline_t pipeline,
+    const void* push_constants,
+    size_t push_constants_size,
+    uint32_t x, uint32_t y, uint32_t z
+);
+
 /* === Resource Destruction === */
 void lgpu_destroy_buffer(lgpu_buffer_t buffer);
+void lgpu_destroy_texture(lgpu_texture_t texture);
+void lgpu_destroy_sampler(lgpu_sampler_t sampler);
 void lgpu_destroy_shader(lgpu_shader_t shader);
 void lgpu_destroy_compute_pipeline(lgpu_compute_pipeline_t pipeline);
+void lgpu_destroy_bindless_compute_pipeline(lgpu_bindless_compute_pipeline_t pipeline);
+void lgpu_destroy_graphics_pipeline(lgpu_graphics_pipeline_t pipeline);
+void lgpu_destroy_timeline_semaphore(lgpu_timeline_semaphore_t semaphore);
 void lgpu_destroy_device(lgpu_device_t device);
 void lgpu_destroy_queue(lgpu_queue_t queue);
 void lgpu_destroy_instance(lgpu_instance_t instance);
@@ -157,3 +408,4 @@ void lgpu_destroy_instance(lgpu_instance_t instance);
 #endif
 
 #endif /* LGPU_H */
+
