@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="lgpu Logo" width="220" />
+</p>
+
 # ⚡ `lgpu` (Lean GPU)
 
 > **The ultra-lightweight, bindless-first, cross-platform GPU abstraction for modern systems.**  
