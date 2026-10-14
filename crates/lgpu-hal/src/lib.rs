@@ -5,6 +5,8 @@
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
+pub mod metal;
+pub mod d3d12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {

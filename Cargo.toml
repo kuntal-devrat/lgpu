@@ -7,6 +7,7 @@ members = [
     "examples/01_headless_compute",
     "examples/02_clear_screen",
     "examples/03_bindless_triangle",
+    "examples/04_bindless_100k",
 ]
 
 [workspace.package]
