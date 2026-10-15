@@ -91,7 +91,7 @@ fn test_c_adapter_info() {
 
         assert_eq!(info.backend, 0, "Backend should be Vulkan (0)");
         assert!(info.vendor_id > 0);
-        assert!(info.supports_descriptor_indexing);
+        assert_ne!(info.supports_descriptor_indexing, 0);
         assert!(info.max_compute_workgroup_size[0] > 0);
 
         lgpu_destroy_instance(instance);

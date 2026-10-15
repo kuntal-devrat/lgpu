@@ -1,7 +1,7 @@
 //! C99 / Zig FFI exports for lgpu
 
 use std::ffi::{c_char, c_void, CString};
-use std::ptr;
+use std::ptr::{self, NonNull};
 
 use lgpu::{
     AddressMode, Backend, BindlessComputePipeline, BufferDesc, BufferUsage, DeviceType,
@@ -63,6 +63,33 @@ pub struct LgpuTimelineSemaphoreWrapper {
     semaphore: lgpu::TimelineSemaphore,
 }
 
+pub struct LgpuSurfaceWrapper {
+    pub(crate) surface: lgpu::Surface,
+}
+
+pub struct LgpuSurfaceTextureWrapper {
+    pub(crate) surface_texture: Option<lgpu::SurfaceTexture>,
+    pub(crate) texture_wrapper: Option<Box<LgpuTextureWrapper>>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LgpuPresentMode {
+    Immediate = 0,
+    Mailbox = 1,
+    Fifo = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct LgpuSurfaceConfig {
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub usage: u32,
+    pub present_mode: LgpuPresentMode,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct LgpuAdapterInfo {
@@ -71,9 +98,10 @@ pub struct LgpuAdapterInfo {
     pub device_type: u32,
     pub vendor_id: u32,
     pub device_id: u32,
-    pub supports_dynamic_rendering: bool,
-    pub supports_timeline_semaphores: bool,
-    pub supports_descriptor_indexing: bool,
+    pub supports_dynamic_rendering: u8,
+    pub supports_timeline_semaphores: u8,
+    pub supports_descriptor_indexing: u8,
+    pub _padding: u8,
     pub max_compute_workgroup_invocations: u32,
     pub max_compute_workgroup_size: [u32; 3],
 }
@@ -98,6 +126,11 @@ pub extern "C" fn lgpu_version() -> u32 {
     1
 }
 
+/// Creates a new `lgpu` Instance.
+///
+/// # Safety
+///
+/// `out_instance` must be a valid, aligned, non-null pointer to a writable `*mut LgpuInstanceWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_instance(
     out_instance: *mut *mut LgpuInstanceWrapper,
@@ -127,6 +160,11 @@ pub unsafe extern "C" fn lgpu_create_instance(
     }
 }
 
+/// Returns the number of physical adapters found by the instance.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_get_adapter_count(instance: *mut LgpuInstanceWrapper) -> u32 {
     if instance.is_null() {
@@ -136,6 +174,12 @@ pub unsafe extern "C" fn lgpu_get_adapter_count(instance: *mut LgpuInstanceWrapp
     wrapper.adapter_names.len() as u32
 }
 
+/// Returns the name of the adapter at the specified index as a C string.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`, or null.
+/// The returned pointer is valid until `instance` is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_get_adapter_name(
     instance: *mut LgpuInstanceWrapper,
@@ -152,6 +196,12 @@ pub unsafe extern "C" fn lgpu_get_adapter_name(
     }
 }
 
+/// Retrieves hardware capabilities and limits for the adapter at `index`.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `out_info` must be a valid, aligned, writable pointer to `LgpuAdapterInfo`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_get_adapter_info(
     instance: *mut LgpuInstanceWrapper,
@@ -189,17 +239,18 @@ pub unsafe extern "C" fn lgpu_get_adapter_info(
         },
         vendor_id: info.vendor_id,
         device_id: info.device_id,
-        supports_dynamic_rendering: info.supports_dynamic_rendering,
-        supports_timeline_semaphores: info.supports_timeline_semaphores,
-        supports_descriptor_indexing: info.supports_descriptor_indexing,
+        supports_dynamic_rendering: info.supports_dynamic_rendering as u8,
+        supports_timeline_semaphores: info.supports_timeline_semaphores as u8,
+        supports_descriptor_indexing: info.supports_descriptor_indexing as u8,
+        _padding: 0,
         max_compute_workgroup_invocations: info.max_compute_workgroup_invocations,
         max_compute_workgroup_size: info.max_compute_workgroup_size,
     };
 
     let name_bytes = info.name.as_bytes();
     let len = name_bytes.len().min(255);
-    for i in 0..len {
-        c_info.name[i] = name_bytes[i] as c_char;
+    for (i, &b) in name_bytes.iter().take(len).enumerate() {
+        c_info.name[i] = b as c_char;
     }
     c_info.name[len] = 0;
 
@@ -207,6 +258,12 @@ pub unsafe extern "C" fn lgpu_get_adapter_info(
     LgpuResult::Success
 }
 
+/// Requests a logical device and queue from the adapter at `adapter_index`.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `out_device` and `out_queue` must be valid, aligned, writable pointers to receive the created handles.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_device(
     instance: *mut LgpuInstanceWrapper,
@@ -238,6 +295,12 @@ pub unsafe extern "C" fn lgpu_create_device(
     }
 }
 
+/// Creates a new GPU buffer with the given size, usage flags, and memory location.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer to `LgpuDeviceWrapper`.
+/// `out_buffer` must be a valid, aligned, writable pointer to `*mut LgpuBufferWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_buffer(
     device: *mut LgpuDeviceWrapper,
@@ -273,6 +336,13 @@ pub unsafe extern "C" fn lgpu_create_buffer(
     }
 }
 
+/// Creates a GPU buffer initialized with initial data.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer to `LgpuDeviceWrapper`.
+/// `data` must point to at least `size` readable bytes.
+/// `out_buffer` must be a valid, aligned, writable pointer to `*mut LgpuBufferWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_buffer_init(
     device: *mut LgpuDeviceWrapper,
@@ -310,6 +380,11 @@ pub unsafe extern "C" fn lgpu_create_buffer_init(
     }
 }
 
+/// Returns the bindless resource index for the buffer, or -1 if not registered.
+///
+/// # Safety
+///
+/// `buffer` must be a valid pointer to `LgpuBufferWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_buffer_get_bindless_id(buffer: *mut LgpuBufferWrapper) -> i32 {
     if buffer.is_null() {
@@ -322,6 +397,13 @@ pub unsafe extern "C" fn lgpu_buffer_get_bindless_id(buffer: *mut LgpuBufferWrap
     }
 }
 
+/// Writes data into a CPU-accessible GPU buffer at the given offset.
+///
+/// # Safety
+///
+/// `buffer` must be a valid pointer to `LgpuBufferWrapper`.
+/// `data` must point to at least `size` readable bytes.
+/// Caller must ensure no concurrent host writes or in-flight GPU accesses violate memory safety.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_write_buffer(
     buffer: *mut LgpuBufferWrapper,
@@ -340,6 +422,13 @@ pub unsafe extern "C" fn lgpu_write_buffer(
     }
 }
 
+/// Reads data from a CPU-accessible GPU buffer at the given offset.
+///
+/// # Safety
+///
+/// `buffer` must be a valid pointer to `LgpuBufferWrapper`.
+/// `data` must point to at least `size` writable bytes.
+/// Caller must ensure GPU operations writing to this buffer have completed.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_read_buffer(
     buffer: *mut LgpuBufferWrapper,
@@ -358,6 +447,13 @@ pub unsafe extern "C" fn lgpu_read_buffer(
     }
 }
 
+/// Creates a shader module from SPIR-V 32-bit words.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer to `LgpuDeviceWrapper`.
+/// `spirv_words` must point to at least `word_count` valid, readable `u32` words.
+/// `out_shader` must be a valid, aligned, writable pointer to `*mut LgpuShaderWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_shader(
     device: *mut LgpuDeviceWrapper,
@@ -379,6 +475,12 @@ pub unsafe extern "C" fn lgpu_create_shader(
     }
 }
 
+/// Creates a compute pipeline with bound buffer count.
+///
+/// # Safety
+///
+/// `device` and `shader` must be valid non-null pointers.
+/// `out_pipeline` must be a valid, aligned, writable pointer to `*mut LgpuComputePipelineWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_compute_pipeline(
     device: *mut LgpuDeviceWrapper,
@@ -400,6 +502,12 @@ pub unsafe extern "C" fn lgpu_create_compute_pipeline(
     }
 }
 
+/// Creates a command encoder for recording GPU commands.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer to `LgpuDeviceWrapper`.
+/// `out_encoder` must be a valid, aligned, writable pointer to `*mut LgpuCommandEncoderWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_command_encoder(
     device: *mut LgpuDeviceWrapper,
@@ -420,6 +528,13 @@ pub unsafe extern "C" fn lgpu_create_command_encoder(
     }
 }
 
+/// Dispatches compute workgroups on a command encoder.
+///
+/// # Safety
+///
+/// `encoder` and `pipeline` must be valid non-null pointers.
+/// If `buffer_count > 0`, `buffers` must point to at least `buffer_count` valid `LgpuBufferWrapper` pointers.
+/// `encoder` must not be accessed concurrently on other threads.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_dispatch_compute(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -448,6 +563,12 @@ pub unsafe extern "C" fn lgpu_dispatch_compute(
     }
 }
 
+/// Finishes recording commands and returns an executable command buffer.
+///
+/// # Safety
+///
+/// `encoder` must be a valid pointer to `LgpuCommandEncoderWrapper`.
+/// The encoder should be freed with `lgpu_destroy_command_encoder` when no longer needed.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_finish_encoder(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -466,6 +587,12 @@ pub unsafe extern "C" fn lgpu_finish_encoder(
     }
 }
 
+/// Submits a recorded command buffer to the GPU queue.
+///
+/// # Safety
+///
+/// `queue` and `command_buffer` must be valid non-null pointers.
+/// The `command_buffer` wrapper must be cleaned up with `lgpu_destroy_command_buffer` when done.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_queue_submit(
     queue: *mut LgpuQueueWrapper,
@@ -486,6 +613,12 @@ pub unsafe extern "C" fn lgpu_queue_submit(
     }
 }
 
+/// Submits multiple command buffers to the GPU queue in batch.
+///
+/// # Safety
+///
+/// `queue` must be a valid non-null pointer.
+/// `command_buffers` must point to at least `count` valid pointers to `LgpuCommandBufferWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_queue_submit_batches(
     queue: *mut LgpuQueueWrapper,
@@ -516,6 +649,14 @@ pub unsafe extern "C" fn lgpu_queue_submit_batches(
     }
 }
 
+/// Submits command buffers asynchronously with timeline semaphore waits and signals.
+///
+/// # Safety
+///
+/// `queue` must be a valid pointer.
+/// If `count > 0`, `command_buffers` must point to `count` valid pointers.
+/// If `wait_count > 0`, `wait_semaphores` and `wait_values` must point to `wait_count` valid elements.
+/// If `signal_count > 0`, `signal_semaphores` and `signal_values` must point to `signal_count` valid elements.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_queue_submit_async(
     queue: *mut LgpuQueueWrapper,
@@ -590,6 +731,12 @@ pub unsafe extern "C" fn lgpu_queue_submit_async(
     }
 }
 
+/// Creates a timeline semaphore with an initial counter value.
+///
+/// # Safety
+///
+/// `device` must be a valid non-null pointer.
+/// `out_semaphore` must be a valid, aligned, writable pointer to `*mut LgpuTimelineSemaphoreWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_timeline_semaphore(
     device: *mut LgpuDeviceWrapper,
@@ -609,6 +756,12 @@ pub unsafe extern "C" fn lgpu_create_timeline_semaphore(
     }
 }
 
+/// Queries the current counter value of a timeline semaphore.
+///
+/// # Safety
+///
+/// `semaphore` must be a valid non-null pointer.
+/// `out_value` must be a valid, aligned, writable pointer to `u64`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_get_timeline_semaphore_value(
     semaphore: *mut LgpuTimelineSemaphoreWrapper,
@@ -627,6 +780,11 @@ pub unsafe extern "C" fn lgpu_get_timeline_semaphore_value(
     }
 }
 
+/// Blocks the CPU host until the timeline semaphore reaches or exceeds `value` or times out.
+///
+/// # Safety
+///
+/// `semaphore` must be a valid non-null pointer.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_wait_timeline_semaphore(
     semaphore: *mut LgpuTimelineSemaphoreWrapper,
@@ -643,6 +801,11 @@ pub unsafe extern "C" fn lgpu_wait_timeline_semaphore(
     }
 }
 
+/// Signals the timeline semaphore to advance to `value` from the host CPU.
+///
+/// # Safety
+///
+/// `semaphore` must be a valid non-null pointer. `value` must be strictly greater than any value previously signaled.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_signal_timeline_semaphore(
     semaphore: *mut LgpuTimelineSemaphoreWrapper,
@@ -658,6 +821,11 @@ pub unsafe extern "C" fn lgpu_signal_timeline_semaphore(
     }
 }
 
+/// Inserts a global execution and memory barrier into the command stream.
+///
+/// # Safety
+///
+/// `encoder` must be a valid non-null pointer and not accessed concurrently.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_encoder_memory_barrier(encoder: *mut LgpuCommandEncoderWrapper) {
     if encoder.is_null() {
@@ -669,6 +837,11 @@ pub unsafe extern "C" fn lgpu_encoder_memory_barrier(encoder: *mut LgpuCommandEn
     }
 }
 
+/// Inserts an execution and memory barrier for a specific buffer.
+///
+/// # Safety
+///
+/// `encoder` and `buffer` must be valid non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_encoder_buffer_barrier(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -684,6 +857,11 @@ pub unsafe extern "C" fn lgpu_encoder_buffer_barrier(
     }
 }
 
+/// Destroys a timeline semaphore.
+///
+/// # Safety
+///
+/// `semaphore` must be a valid pointer or null. It must not be referenced after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_timeline_semaphore(
     semaphore: *mut LgpuTimelineSemaphoreWrapper,
@@ -694,6 +872,12 @@ pub unsafe extern "C" fn lgpu_destroy_timeline_semaphore(
 }
 
 
+/// Creates a 2D or 3D GPU texture.
+///
+/// # Safety
+///
+/// `device` must be a valid non-null pointer.
+/// `out_texture` must be a valid, aligned, writable pointer to `*mut LgpuTextureWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_texture(
     device: *mut LgpuDeviceWrapper,
@@ -725,6 +909,8 @@ pub unsafe extern "C" fn lgpu_create_texture(
         width,
         height,
         depth: depth.max(1),
+        mip_levels: 1,
+        sample_count: 1,
         format: tex_format,
         usage: TextureUsage::from_bits_truncate(usage),
     };
@@ -738,6 +924,11 @@ pub unsafe extern "C" fn lgpu_create_texture(
     }
 }
 
+/// Returns the bindless resource index for the texture, or -1 if not registered.
+///
+/// # Safety
+///
+/// `texture` must be a valid pointer to `LgpuTextureWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_texture_get_bindless_id(texture: *mut LgpuTextureWrapper) -> i32 {
     if texture.is_null() {
@@ -750,6 +941,11 @@ pub unsafe extern "C" fn lgpu_texture_get_bindless_id(texture: *mut LgpuTextureW
     }
 }
 
+/// Destroys a GPU texture.
+///
+/// # Safety
+///
+/// `texture` must be a valid pointer or null. It must not be in-flight or used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_texture(texture: *mut LgpuTextureWrapper) {
     if !texture.is_null() {
@@ -757,6 +953,12 @@ pub unsafe extern "C" fn lgpu_destroy_texture(texture: *mut LgpuTextureWrapper) 
     }
 }
 
+/// Creates a texture sampler.
+///
+/// # Safety
+///
+/// `device` must be a valid non-null pointer.
+/// `out_sampler` must be a valid, aligned, writable pointer to `*mut LgpuSamplerWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_sampler(
     device: *mut LgpuDeviceWrapper,
@@ -802,6 +1004,11 @@ pub unsafe extern "C" fn lgpu_create_sampler(
     }
 }
 
+/// Returns the bindless resource index for the sampler, or -1 if not registered.
+///
+/// # Safety
+///
+/// `sampler` must be a valid pointer to `LgpuSamplerWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_sampler_get_bindless_id(sampler: *mut LgpuSamplerWrapper) -> i32 {
     if sampler.is_null() {
@@ -814,6 +1021,11 @@ pub unsafe extern "C" fn lgpu_sampler_get_bindless_id(sampler: *mut LgpuSamplerW
     }
 }
 
+/// Destroys a texture sampler.
+///
+/// # Safety
+///
+/// `sampler` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_sampler(sampler: *mut LgpuSamplerWrapper) {
     if !sampler.is_null() {
@@ -821,6 +1033,13 @@ pub unsafe extern "C" fn lgpu_destroy_sampler(sampler: *mut LgpuSamplerWrapper) 
     }
 }
 
+/// Creates a graphics pipeline with optional depth testing and writing.
+///
+/// # Safety
+///
+/// `device` and `shader` must be valid non-null pointers.
+/// `vs_entry` and `fs_entry` must be valid null-terminated C string pointers.
+/// `out_pipeline` must be a valid, aligned, writable pointer to `*mut LgpuGraphicsPipelineWrapper`.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_graphics_pipeline(
     device: *mut LgpuDeviceWrapper,
@@ -883,6 +1102,11 @@ pub unsafe extern "C" fn lgpu_create_graphics_pipeline(
     }
 }
 
+/// Destroys a graphics pipeline.
+///
+/// # Safety
+///
+/// `pipeline` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_graphics_pipeline(pipeline: *mut LgpuGraphicsPipelineWrapper) {
     if !pipeline.is_null() {
@@ -890,6 +1114,13 @@ pub unsafe extern "C" fn lgpu_destroy_graphics_pipeline(pipeline: *mut LgpuGraph
     }
 }
 
+/// Clears color and depth attachments and begins a rendering pass.
+///
+/// # Safety
+///
+/// `encoder`, `color_texture`, `depth_texture`, and `clear_color` must be valid non-null pointers.
+/// `color_texture` and `depth_texture` must point to distinct textures to prevent aliasing.
+/// `clear_color` must point to at least 4 valid `f32` components [r, g, b, a].
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_clear_and_render_with_depth(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -901,6 +1132,10 @@ pub unsafe extern "C" fn lgpu_clear_and_render_with_depth(
     if encoder.is_null() || color_texture.is_null() || depth_texture.is_null() || clear_color.is_null() {
         return;
     }
+    // Prevent attachment aliasing
+    if color_texture == depth_texture {
+        return;
+    }
     let enc_wrapper = &mut *encoder;
     let col = &*color_texture;
     let dep = &*depth_texture;
@@ -908,10 +1143,18 @@ pub unsafe extern "C" fn lgpu_clear_and_render_with_depth(
     let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.clear_and_render_with_depth(&col.texture, &dep.texture, color_arr, clear_depth);
+        let _ = enc.clear_and_render_with_depth(&col.texture, &dep.texture, color_arr, clear_depth);
     }
 }
 
+/// Clears attachments, binds pipeline, and issues a draw call with depth.
+///
+/// # Safety
+///
+/// `encoder`, `color_texture`, `depth_texture`, `pipeline`, and `clear_color` must be valid non-null pointers.
+/// `color_texture` and `depth_texture` must point to distinct textures to prevent aliasing.
+/// `clear_color` must point to at least 4 valid `f32` components.
+/// If `push_constants` is non-null and `push_constants_size > 0`, it must point to readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_draw_with_depth(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -925,6 +1168,10 @@ pub unsafe extern "C" fn lgpu_draw_with_depth(
     clear_depth: f32,
 ) {
     if encoder.is_null() || color_texture.is_null() || depth_texture.is_null() || pipeline.is_null() || clear_color.is_null() {
+        return;
+    }
+    // Prevent attachment aliasing
+    if color_texture == depth_texture {
         return;
     }
     let enc_wrapper = &mut *encoder;
@@ -941,7 +1188,7 @@ pub unsafe extern "C" fn lgpu_draw_with_depth(
     };
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.draw_with_depth(
+        let _ = enc.draw_with_depth(
             &col.texture,
             &dep.texture,
             &pip.pipeline,
@@ -953,6 +1200,12 @@ pub unsafe extern "C" fn lgpu_draw_with_depth(
     }
 }
 
+/// Clears a color texture.
+///
+/// # Safety
+///
+/// `encoder`, `texture`, and `clear_color` must be valid non-null pointers.
+/// `clear_color` must point to at least 4 valid `f32` values.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_clear_and_render_texture(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -968,10 +1221,16 @@ pub unsafe extern "C" fn lgpu_clear_and_render_texture(
     let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.clear_and_render_texture(&tex.texture, color_arr);
+        let _ = enc.clear_and_render_texture(&tex.texture, color_arr);
     }
 }
 
+/// Clears color attachment, binds pipeline, and issues a draw call.
+///
+/// # Safety
+///
+/// `encoder`, `texture`, `pipeline`, and `clear_color` must be valid non-null pointers.
+/// `clear_color` must point to at least 4 valid `f32` values.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_draw(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -998,10 +1257,16 @@ pub unsafe extern "C" fn lgpu_draw(
     };
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.draw(&tex.texture, &pip.pipeline, vertex_count, pc_slice, color_arr);
+        let _ = enc.draw(&tex.texture, &pip.pipeline, vertex_count, pc_slice, color_arr);
     }
 }
 
+/// Renders a test triangle to the given texture.
+///
+/// # Safety
+///
+/// `encoder`, `texture`, `pipeline`, and `clear_color` must be valid non-null pointers.
+/// `clear_color` must point to at least 4 valid `f32` values.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_render_triangle(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -1019,10 +1284,15 @@ pub unsafe extern "C" fn lgpu_render_triangle(
     let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.render_triangle(&tex.texture, &pip.pipeline, color_arr);
+        let _ = enc.render_triangle(&tex.texture, &pip.pipeline, color_arr);
     }
 }
 
+/// Copies texture image data into a destination buffer.
+///
+/// # Safety
+///
+/// `encoder`, `texture`, and `buffer` must be valid non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_copy_texture_to_buffer(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -1041,6 +1311,174 @@ pub unsafe extern "C" fn lgpu_copy_texture_to_buffer(
     }
 }
 
+/// Copies data from one buffer into another buffer on the GPU.
+///
+/// # Safety
+///
+/// `encoder`, `source`, and `destination` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_copy_buffer_to_buffer(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    source: *mut LgpuBufferWrapper,
+    source_offset: u64,
+    destination: *mut LgpuBufferWrapper,
+    destination_offset: u64,
+    size: u64,
+) {
+    if encoder.is_null() || source.is_null() || destination.is_null() {
+        return;
+    }
+    let enc_wrapper = &mut *encoder;
+    let src = &*source;
+    let dst = &*destination;
+
+    if let Some(enc) = &mut enc_wrapper.encoder {
+        enc.copy_buffer_to_buffer(&src.buffer, source_offset, &dst.buffer, destination_offset, size);
+    }
+}
+
+/// Copies pixel data from a buffer to a texture.
+///
+/// # Safety
+///
+/// `encoder`, `buffer`, and `texture` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_copy_buffer_to_texture(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    buffer: *mut LgpuBufferWrapper,
+    texture: *mut LgpuTextureWrapper,
+) {
+    if encoder.is_null() || buffer.is_null() || texture.is_null() {
+        return;
+    }
+    let enc_wrapper = &mut *encoder;
+    let buf = &*buffer;
+    let tex = &*texture;
+
+    if let Some(enc) = &mut enc_wrapper.encoder {
+        enc.copy_buffer_to_texture(&buf.buffer, &tex.texture);
+    }
+}
+
+/// Dispatches a bindless compute pipeline using indirect dispatch parameters from a GPU buffer.
+///
+/// # Safety
+///
+/// `encoder`, `pipeline`, and `indirect_buffer` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_dispatch_indirect(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    pipeline: *mut LgpuBindlessComputePipelineWrapper,
+    indirect_buffer: *mut LgpuBufferWrapper,
+    indirect_offset: u64,
+    push_constants: *const c_void,
+    push_constants_size: usize,
+) -> LgpuResult {
+    if encoder.is_null() || pipeline.is_null() || indirect_buffer.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let enc_wrapper = &mut *encoder;
+    let pip = &*pipeline;
+    let buf = &*indirect_buffer;
+
+    let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
+        std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
+    } else {
+        &[]
+    };
+
+    if let Some(enc) = &mut enc_wrapper.encoder {
+        match enc.dispatch_indirect(&pip.pipeline, &buf.buffer, indirect_offset, pc_slice) {
+            Ok(()) => LgpuResult::Success,
+            Err(_) => LgpuResult::ErrorGeneric,
+        }
+    } else {
+        LgpuResult::ErrorGeneric
+    }
+}
+
+/// Draws indexed geometry to the given render target texture.
+///
+/// # Safety
+///
+/// `encoder`, `texture`, `pipeline`, `index_buffer`, and `clear_color` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_draw_indexed(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    texture: *mut LgpuTextureWrapper,
+    pipeline: *mut LgpuGraphicsPipelineWrapper,
+    index_buffer: *mut LgpuBufferWrapper,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+    push_constants: *const c_void,
+    push_constants_size: usize,
+    clear_color: *const f32,
+) {
+    if encoder.is_null() || texture.is_null() || pipeline.is_null() || index_buffer.is_null() || clear_color.is_null() {
+        return;
+    }
+    let enc_wrapper = &mut *encoder;
+    let tex = &*texture;
+    let pip = &*pipeline;
+    let idx_buf = &*index_buffer;
+    let color_slice = std::slice::from_raw_parts(clear_color, 4);
+    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+
+    let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
+        std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
+    } else {
+        &[]
+    };
+
+    if let Some(enc) = &mut enc_wrapper.encoder {
+        let _ = enc.draw_indexed(
+            &tex.texture,
+            &pip.pipeline,
+            &idx_buf.buffer,
+            index_count,
+            instance_count,
+            first_index,
+            vertex_offset,
+            first_instance,
+            pc_slice,
+            color_arr,
+        );
+    }
+}
+
+/// Directly uploads CPU memory to a GPU texture.
+///
+/// # Safety
+///
+/// `device`, `texture`, and `data` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_write_texture(
+    device: *mut LgpuDeviceWrapper,
+    texture: *mut LgpuTextureWrapper,
+    data: *const u8,
+    data_len: usize,
+) -> LgpuResult {
+    if device.is_null() || texture.is_null() || data.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let dev = &*device;
+    let tex = &*texture;
+    let byte_slice = std::slice::from_raw_parts(data, data_len);
+
+    match dev.device.write_texture(&tex.texture, byte_slice) {
+        Ok(()) => LgpuResult::Success,
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Returns the width of the texture in pixels.
+///
+/// # Safety
+///
+/// `texture` must be a valid pointer to `LgpuTextureWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_texture_get_width(texture: *mut LgpuTextureWrapper) -> u32 {
     if texture.is_null() {
@@ -1050,6 +1488,11 @@ pub unsafe extern "C" fn lgpu_texture_get_width(texture: *mut LgpuTextureWrapper
     tex.texture.width
 }
 
+/// Returns the height of the texture in pixels.
+///
+/// # Safety
+///
+/// `texture` must be a valid pointer to `LgpuTextureWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_texture_get_height(texture: *mut LgpuTextureWrapper) -> u32 {
     if texture.is_null() {
@@ -1059,6 +1502,11 @@ pub unsafe extern "C" fn lgpu_texture_get_height(texture: *mut LgpuTextureWrappe
     tex.texture.height
 }
 
+/// Returns the integer code representing the texture format.
+///
+/// # Safety
+///
+/// `texture` must be a valid pointer to `LgpuTextureWrapper`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_texture_get_format(texture: *mut LgpuTextureWrapper) -> i32 {
     if texture.is_null() {
@@ -1077,6 +1525,11 @@ pub unsafe extern "C" fn lgpu_texture_get_format(texture: *mut LgpuTextureWrappe
     }
 }
 
+/// Creates a bindless compute pipeline.
+///
+/// # Safety
+///
+/// `device`, `shader`, and `out_pipeline` must be valid non-null pointers.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_create_bindless_compute_pipeline(
     device: *mut LgpuDeviceWrapper,
@@ -1098,6 +1551,12 @@ pub unsafe extern "C" fn lgpu_create_bindless_compute_pipeline(
     }
 }
 
+/// Dispatches compute work on a bindless pipeline with push constants.
+///
+/// # Safety
+///
+/// `encoder` and `pipeline` must be valid non-null pointers.
+/// If `push_constants` is non-null and `push_constants_size > 0`, it must point to readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_dispatch_bindless_compute(
     encoder: *mut LgpuCommandEncoderWrapper,
@@ -1130,6 +1589,11 @@ pub unsafe extern "C" fn lgpu_dispatch_bindless_compute(
     }
 }
 
+/// Destroys a bindless compute pipeline.
+///
+/// # Safety
+///
+/// `pipeline` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_bindless_compute_pipeline(
     pipeline: *mut LgpuBindlessComputePipelineWrapper,
@@ -1139,6 +1603,11 @@ pub unsafe extern "C" fn lgpu_destroy_bindless_compute_pipeline(
     }
 }
 
+/// Destroys a GPU buffer.
+///
+/// # Safety
+///
+/// `buffer` must be a valid pointer or null. It must not be accessed or in-flight after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_buffer(buffer: *mut LgpuBufferWrapper) {
     if !buffer.is_null() {
@@ -1146,6 +1615,11 @@ pub unsafe extern "C" fn lgpu_destroy_buffer(buffer: *mut LgpuBufferWrapper) {
     }
 }
 
+/// Destroys a shader module.
+///
+/// # Safety
+///
+/// `shader` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_shader(shader: *mut LgpuShaderWrapper) {
     if !shader.is_null() {
@@ -1153,6 +1627,11 @@ pub unsafe extern "C" fn lgpu_destroy_shader(shader: *mut LgpuShaderWrapper) {
     }
 }
 
+/// Destroys a compute pipeline.
+///
+/// # Safety
+///
+/// `pipeline` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_compute_pipeline(pipeline: *mut LgpuComputePipelineWrapper) {
     if !pipeline.is_null() {
@@ -1160,6 +1639,11 @@ pub unsafe extern "C" fn lgpu_destroy_compute_pipeline(pipeline: *mut LgpuComput
     }
 }
 
+/// Destroys a logical GPU device.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_device(device: *mut LgpuDeviceWrapper) {
     if !device.is_null() {
@@ -1167,6 +1651,11 @@ pub unsafe extern "C" fn lgpu_destroy_device(device: *mut LgpuDeviceWrapper) {
     }
 }
 
+/// Destroys a GPU queue handle wrapper.
+///
+/// # Safety
+///
+/// `queue` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_queue(queue: *mut LgpuQueueWrapper) {
     if !queue.is_null() {
@@ -1174,10 +1663,366 @@ pub unsafe extern "C" fn lgpu_destroy_queue(queue: *mut LgpuQueueWrapper) {
     }
 }
 
+/// Destroys an lgpu Instance.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
 pub unsafe extern "C" fn lgpu_destroy_instance(instance: *mut LgpuInstanceWrapper) {
     if !instance.is_null() {
         drop(Box::from_raw(instance));
+    }
+}
+
+/// Destroys a command encoder.
+///
+/// # Safety
+///
+/// `encoder` must be a valid pointer obtained from `lgpu_create_command_encoder`, or null.
+/// Once destroyed, the pointer must not be dereferenced or reused.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_destroy_command_encoder(encoder: *mut LgpuCommandEncoderWrapper) {
+    if !encoder.is_null() {
+        drop(Box::from_raw(encoder));
+    }
+}
+
+/// Destroys a command buffer.
+///
+/// # Safety
+///
+/// `command_buffer` must be a valid pointer obtained from `lgpu_finish_encoder`, or null.
+/// Once destroyed, the pointer must not be dereferenced or reused.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_destroy_command_buffer(command_buffer: *mut LgpuCommandBufferWrapper) {
+    if !command_buffer.is_null() {
+        drop(Box::from_raw(command_buffer));
+    }
+}
+
+/// Waits for all pending GPU work on `device` to complete.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer obtained from `lgpu_create_device`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_wait_idle(device: *mut LgpuDeviceWrapper) -> LgpuResult {
+    if device.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*device).device.wait_idle() {
+        Ok(()) => LgpuResult::Success,
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a headless surface for offscreen/test presentation.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_headless(
+    instance: *mut LgpuInstanceWrapper,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*instance).instance.create_headless_surface() {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a window surface from Xlib Display and Window.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `dpy` must be a valid Xlib `Display*` and `window` a valid Xlib `Window`.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_from_xlib(
+    instance: *mut LgpuInstanceWrapper,
+    dpy: *mut c_void,
+    window: std::ffi::c_ulong,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let display_handle = raw_window_handle::RawDisplayHandle::Xlib(
+        raw_window_handle::XlibDisplayHandle::new(NonNull::new(dpy), 0),
+    );
+    let window_handle = raw_window_handle::RawWindowHandle::Xlib(
+        raw_window_handle::XlibWindowHandle::new(window),
+    );
+    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a window surface from XCB connection and window ID.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `connection` must be a valid XCB connection pointer.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_from_xcb(
+    instance: *mut LgpuInstanceWrapper,
+    connection: *mut c_void,
+    window: u32,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let display_handle = raw_window_handle::RawDisplayHandle::Xcb(
+        raw_window_handle::XcbDisplayHandle::new(NonNull::new(connection), 0),
+    );
+    let non_zero_win = match std::num::NonZeroU32::new(window) {
+        Some(w) => w,
+        None => return LgpuResult::ErrorGeneric,
+    };
+    let window_handle = raw_window_handle::RawWindowHandle::Xcb(
+        raw_window_handle::XcbWindowHandle::new(non_zero_win),
+    );
+    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a window surface from Wayland display and surface pointers.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `display` and `surface` must be non-null valid Wayland display and surface pointers.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_from_wayland(
+    instance: *mut LgpuInstanceWrapper,
+    display: *mut c_void,
+    surface: *mut c_void,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || display.is_null() || surface.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let display_handle = raw_window_handle::RawDisplayHandle::Wayland(
+        raw_window_handle::WaylandDisplayHandle::new(NonNull::new_unchecked(display)),
+    );
+    let window_handle = raw_window_handle::RawWindowHandle::Wayland(
+        raw_window_handle::WaylandWindowHandle::new(NonNull::new_unchecked(surface)),
+    );
+    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a window surface from Win32 HINSTANCE and HWND.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `hwnd` must be a valid non-zero HWND handle.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_from_win32(
+    instance: *mut LgpuInstanceWrapper,
+    _hinstance: *mut c_void,
+    hwnd: *mut c_void,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || hwnd.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let display_handle = raw_window_handle::RawDisplayHandle::Windows(
+        raw_window_handle::WindowsDisplayHandle::new(),
+    );
+    let non_zero_hwnd = match std::num::NonZeroIsize::new(hwnd as isize) {
+        Some(h) => h,
+        None => return LgpuResult::ErrorGeneric,
+    };
+    let window_handle = raw_window_handle::RawWindowHandle::Win32(
+        raw_window_handle::Win32WindowHandle::new(non_zero_hwnd),
+    );
+    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Configures swapchain dimensions, format, and present mode on `surface`.
+///
+/// # Safety
+///
+/// `surface`, `device`, and `config` must be valid, non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_surface_configure(
+    surface: *mut LgpuSurfaceWrapper,
+    device: *mut LgpuDeviceWrapper,
+    config: *const LgpuSurfaceConfig,
+) -> LgpuResult {
+    if surface.is_null() || device.is_null() || config.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let rust_format = match (*config).format {
+        0 => TextureFormat::Rgba8Unorm,
+        1 => TextureFormat::Rgba8Srgb,
+        2 => TextureFormat::Bgra8Unorm,
+        3 => TextureFormat::Bgra8Srgb,
+        4 => TextureFormat::R32Float,
+        5 => TextureFormat::Rgba16Float,
+        6 => TextureFormat::Rgba32Float,
+        7 => TextureFormat::Depth32Float,
+        _ => return LgpuResult::ErrorGeneric,
+    };
+    let rust_present_mode = match (*config).present_mode {
+        LgpuPresentMode::Immediate => lgpu::PresentMode::Immediate,
+        LgpuPresentMode::Mailbox => lgpu::PresentMode::Mailbox,
+        LgpuPresentMode::Fifo => lgpu::PresentMode::Fifo,
+    };
+    let rust_usage = TextureUsage::from_bits_truncate((*config).usage);
+    let rust_config = lgpu::SurfaceConfiguration {
+        usage: rust_usage,
+        format: rust_format,
+        width: (*config).width,
+        height: (*config).height,
+        present_mode: rust_present_mode,
+    };
+    match (*surface).surface.configure(&(*device).device, &rust_config) {
+        Ok(()) => LgpuResult::Success,
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Acquires the next swapchain image as a surface texture.
+///
+/// # Safety
+///
+/// `surface` and `out_surface_texture` must be valid, non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_surface_get_current_texture(
+    surface: *mut LgpuSurfaceWrapper,
+    out_surface_texture: *mut *mut LgpuSurfaceTextureWrapper,
+) -> LgpuResult {
+    if surface.is_null() || out_surface_texture.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*surface).surface.get_current_texture() {
+        Ok(st) => {
+            let tex_wrapper = Box::new(LgpuTextureWrapper {
+                texture: st.texture.clone_unowned(),
+            });
+            let wrapper = Box::new(LgpuSurfaceTextureWrapper {
+                surface_texture: Some(st),
+                texture_wrapper: Some(tex_wrapper),
+            });
+            *out_surface_texture = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Retrieves the `lgpu_texture_t` handle from a surface texture for encoding draw commands.
+///
+/// # Safety
+///
+/// `surface_texture` must be a valid pointer obtained from `lgpu_surface_get_current_texture`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_surface_texture_get_texture(
+    surface_texture: *mut LgpuSurfaceTextureWrapper,
+) -> *mut LgpuTextureWrapper {
+    if surface_texture.is_null() {
+        return ptr::null_mut();
+    }
+    match &mut (*surface_texture).texture_wrapper {
+        Some(tw) => &mut **tw as *mut LgpuTextureWrapper,
+        None => ptr::null_mut(),
+    }
+}
+
+/// Submits a command buffer targeted to a swapchain texture and queues presentation.
+///
+/// # Safety
+///
+/// `queue`, `command_buffer`, and `surface_texture` must be valid, live pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_queue_submit_surface(
+    queue: *mut LgpuQueueWrapper,
+    command_buffer: *mut LgpuCommandBufferWrapper,
+    surface_texture: *mut LgpuSurfaceTextureWrapper,
+) -> LgpuResult {
+    if queue.is_null() || command_buffer.is_null() || surface_texture.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let cmd = match (*command_buffer).command_buffer.take() {
+        Some(cmd) => cmd,
+        None => return LgpuResult::ErrorCommand,
+    };
+    let st = match (*surface_texture).surface_texture.take() {
+        Some(st) => st,
+        None => return LgpuResult::ErrorGeneric,
+    };
+    match (*queue).queue.submit_surface(cmd, st) {
+        Ok(()) => LgpuResult::Success,
+        Err(_) => LgpuResult::ErrorCommand,
+    }
+}
+
+/// Frees an acquired surface texture wrapper.
+///
+/// # Safety
+///
+/// `surface_texture` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_surface_texture_destroy(
+    surface_texture: *mut LgpuSurfaceTextureWrapper,
+) {
+    if !surface_texture.is_null() {
+        drop(Box::from_raw(surface_texture));
+    }
+}
+
+/// Destroys an lgpu window surface.
+///
+/// # Safety
+///
+/// `surface` must be a valid pointer obtained from `lgpu_create_surface_*`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_destroy_surface(surface: *mut LgpuSurfaceWrapper) {
+    if !surface.is_null() {
+        drop(Box::from_raw(surface));
     }
 }
 

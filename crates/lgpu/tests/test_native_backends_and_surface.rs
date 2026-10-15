@@ -57,6 +57,8 @@ fn test_metal_backend_complete_bindless_and_storage() {
             width: 512,
             height: 512,
             depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsage::TEXTURE_BINDING | TextureUsage::RENDER_ATTACHMENT,
         };
@@ -133,6 +135,8 @@ fn test_d3d12_backend_complete_bindless_and_storage() {
             width: 1024,
             height: 1024,
             depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsage::TEXTURE_BINDING | TextureUsage::RENDER_ATTACHMENT,
         };

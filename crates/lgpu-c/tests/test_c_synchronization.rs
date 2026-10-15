@@ -102,19 +102,16 @@ fn test_c_ffi_timeline_semaphores_and_barriers() {
         // 5. Cleanup
         lgpu_destroy_timeline_semaphore(semaphore);
         lgpu_destroy_buffer(buffer);
-        lgpu_destroy_command_buffer_wrapper(cmd1);
-        lgpu_destroy_command_buffer_wrapper(cmd2);
-        lgpu_destroy_command_buffer_wrapper(cmd3);
+        lgpu_destroy_command_encoder(encoder);
+        lgpu_destroy_command_encoder(encoder2);
+        lgpu_destroy_command_encoder(encoder3);
+        lgpu_destroy_command_buffer(cmd1);
+        lgpu_destroy_command_buffer(cmd2);
+        lgpu_destroy_command_buffer(cmd3);
         lgpu_destroy_queue(queue);
         lgpu_destroy_device(device);
         lgpu_destroy_instance(instance);
     }
 
     println!("SUCCESS: C FFI timeline semaphores, batch submissions, and barriers verified.");
-}
-
-unsafe fn lgpu_destroy_command_buffer_wrapper(cmd: *mut LgpuCommandBufferWrapper) {
-    if !cmd.is_null() {
-        drop(Box::from_raw(cmd));
-    }
 }

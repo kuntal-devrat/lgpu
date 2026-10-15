@@ -151,10 +151,13 @@ pub struct MetalTexture {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+    pub mip_levels: u32,
+    pub sample_count: u32,
     pub format: TextureFormat,
     pub usage: TextureUsage,
     pub bindless_id: Option<u32>,
     pub data: Mutex<Vec<u8>>,
+    pub owned: bool,
 }
 
 pub struct MetalSampler {
@@ -325,14 +328,20 @@ impl MetalDevice {
             width: desc.width,
             height: desc.height,
             depth: desc.depth,
+            mip_levels: desc.mip_levels.max(1),
+            sample_count: desc.sample_count.max(1),
             format: desc.format,
             usage: desc.usage,
             bindless_id,
             data: Mutex::new(vec![0u8; total_bytes]),
+            owned: true,
         })
     }
 
     pub fn destroy_texture(&self, texture: MetalTexture) {
+        if !texture.owned {
+            return;
+        }
         if let Some(id) = texture.bindless_id {
             self.heap.lock().unwrap().release_texture_slot(id);
         }

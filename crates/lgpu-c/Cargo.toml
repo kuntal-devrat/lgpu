@@ -10,3 +10,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 lgpu = { path = "../lgpu" }
+raw-window-handle = { workspace = true }

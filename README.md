@@ -2,91 +2,51 @@
   <img src="assets/logo_banner.png" alt="lgpu Logo Banner" width="480" />
 </p>
 
-# ⚡ `lgpu` (Lean GPU)
+# lgpu
 
-> **The ultra-lightweight, bindless-first, cross-platform GPU abstraction for modern systems.**  
-> *Sub-3-second compile times. <500 KB binary footprint. Zero W3C sandbox bloat. Direct access to modern silicon.*
+`lgpu` is a lightweight GPU library written in Rust with C bindings. It provides a direct, minimal abstraction over modern GPU APIs, focusing on bindless descriptor indexing, dynamic rendering, and explicit resource management.
 
----
+## Features
 
-## 🚀 Why `lgpu`?
+- **Bindless by Design**: Unbounded descriptor indexing for buffers and textures.
+- **Modern Rendering**: Uses Vulkan 1.3 dynamic rendering without legacy render pass objects.
+- **Compute & Graphics**: Unified pipelines for compute dispatches and graphics draw calls.
+- **Memory Suballocator**: Built-in suballocation for efficient buffer allocations and recycling.
+- **Synchronization**: Support for timeline semaphores, memory barriers, and multi-buffered frame submission.
+- **C FFI (`lgpu-c`)**: C99-compatible header (`include/lgpu.h`) for integration with C, C++, and other languages.
+- **Dynamic Loading**: Dynamically loads Vulkan at runtime without requiring static SDK linkage.
 
-Modern GPU programming forced developers to choose between two painful extremes:
-1. **`wgpu` / WebGPU:** Chained to 2017 browser security constraints. 200+ dependency crates, 2-minute build times, 25MB binary bloat, no native bindless arrays, no warp/subgroup operations, and high runtime CPU validation overhead.
-2. **Raw Native APIs (`ash`, `Metal`, `DirectX 12`):** Thousands of lines of unsafe boilerplate, manual synchronization nightmares, and zero cross-platform portability.
+## Architecture
 
-`lgpu` bridges this gap. It gives you the **safety and cross-platform ergonomics** of modern Rust and C, while embracing **modern GPU silicon as it actually exists today**: dynamic rendering, bindless descriptor indexing, and zero-overhead dynamic driver loading.
+The project is structured into three crates:
 
----
+- **`lgpu`**: The high-level, safe Rust API.
+- **`lgpu-hal`**: Low-level hardware abstraction layer managing dynamic driver loading and Vulkan objects.
+- **`lgpu-c`**: C-compatible FFI wrapper and C header definitions.
 
-## 📊 The Numbers: `lgpu` vs `wgpu`
+## Quick Start (Rust)
 
-| Metric | `wgpu` | `sokol_gfx` | `lgpu` (Lean GPU) |
-| :--- | :--- | :--- | :--- |
-| **Clean Compile Time** | 60–120s | < 1s | **~ 2.5s** |
-| **Dependencies** | ~210 crates | 0 (Header-only) | **< 10 crates** |
-| **Release Binary Size** | ~18–25 MB | ~150 KB | **432 KB** *(Tested!)* |
-| **Bindless Support** | ❌ No | ❌ No | **✅ Native First-Class** |
-| **Dynamic Rendering** | ❌ Emulated | ❌ No | **✅ Vulkan 1.3+ Native** |
-| **Languages** | Rust-first | C99-only | **Safe Rust + C99 / Zig C-ABI** |
-| **Driver Overhead** | Static/SDK required | Dynamic/Static | **Zero SDK required (Dynamic Loader)** |
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      User Applications                      │
-│       [Rust Crates]        [C / C++ Code]        [Zig Apps] │
-└─────────────┬─────────────────────┬───────────────────┬─────┘
-              │              ┌──────▼───────────────────▼──┐  
-              │              │      lgpu-c (C99 ABI)       │  
-              │              │         (lgpu.h)            │  
-              │              └──────────────┬──────────────┘  
-              │                             │                 
-┌─────────────▼─────────────────────────────▼─────────────────┐
-│                 lgpu (Safe High-Level API)                  │
-│   • Global Bindless Resource Pool (Bindless-First)          │
-│   • Modern Dynamic Rendering (No legacy RenderPass objects) │
-│   • Unified Compute & Graphics Command Recorders            │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────────┐
-│                 lgpu-hal (Micro HAL Layer)                  │
-│       (Direct Dynamic Loading • Zero Heavy SDK Bloat)       │
-├──────────────────────────┬──────────────────────────────────┤
-│    lgpu-hal-vulkan       │      lgpu-hal-metal (Planned)    │
-│  • Dynamic libvulkan.so  │  • Pure objc_msgSend             │
-│  • Vulkan 1.2+ / 1.3     │  • Metal 3 Argument Buffers      │
-└──────────────────────────┴──────────────────────────────────┘
-```
-
----
-
-## ⚡ Quick Start: Headless GPU Compute in 30 Seconds
+A minimal headless compute example dispatching a kernel and reading back results:
 
 ```rust
 use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Initialize instance and pick primary GPU
     let instance = Instance::new()?;
-    let adapter = &instance.enumerate_adapters()?[0];
-    let (device, queue) = adapter.request_device(&instance)?;
+    let adapters = instance.enumerate_adapters()?;
+    let (device, queue) = adapters[0].request_device(&instance)?;
 
-    // 2. Allocate GPU buffers
     let desc = BufferDesc {
         label: Some("ComputeBuffer"),
         size: 256,
         usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
         memory_location: MemoryLocation::CpuToGpu,
     };
-    let buf_a = device.create_buffer_init(&desc, &[1.0f32, 2.0, 3.0, 4.0])?;
-    let buf_b = device.create_buffer_init(&desc, &[10.0f32, 20.0, 30.0, 40.0])?;
+
+    let buf_a = device.create_buffer_init_slice(&desc, &[1.0f32, 2.0, 3.0, 4.0])?;
+    let buf_b = device.create_buffer_init_slice(&desc, &[10.0f32, 20.0, 30.0, 40.0])?;
     let buf_c = device.create_buffer(&desc)?;
 
-    // 3. Dispatch compute kernel
     let shader = device.create_shader_spirv(VECTOR_ADD_SPV)?;
     let pipeline = device.create_compute_pipeline(&shader, 3)?;
 
@@ -94,69 +54,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     encoder.dispatch_compute(&pipeline, &[&buf_a, &buf_b, &buf_c], 1, 1, 1);
     queue.submit(encoder.finish())?;
 
-    // 4. Read back results
     let mut results = [0.0f32; 4];
     buf_c.read(bytemuck::cast_slice_mut(&mut results))?;
-    println!("GPU Compute Output: {:?}", results); // [11.0, 22.0, 33.0, 44.0]
+    println!("Output: {:?}", results);
 
     Ok(())
 }
 ```
 
----
+## Running Examples
 
-## 🧪 Running the Examples
+The repository includes several examples demonstrating various capabilities:
 
-# Run interactive desktop window demo (3D polygons, raymarched shaders, 300+ FPS)
-cargo run --release -p example-window-shader
-
-# Run headless GPGPU vector addition
+```bash
+# Headless compute (vector addition)
 cargo run -p example-headless-compute
 
-# Run modern dynamic rendering offscreen clear
+# Clear screen using dynamic rendering
 cargo run -p example-clear-screen
 
-# Run dynamic rendering triangle rasterization (zero vertex buffers!)
+# Triangle rendering with bindless resources
 cargo run -p example-bindless-triangle
 
-# Run 100,000 GPU particles physics simulation stress test
+# Particle simulation with 100,000 instances
 cargo run -p example-bindless-100k
 
-# Compile and run the standalone pure C99 program
-gcc -std=c99 examples/c_example/main.c -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o target/debug/c_example
-./target/debug/c_example
-
-# Run hardware & bindless integration tests
-cargo test --all
+# Windowed rendering with multiple shader modes
+cargo run -p example-window-shader
 ```
 
-### 🎮 Interactive Window Demo Controls (`05_window_shader`)
+### Running C Examples
 
-| Control | Action |
-| :--- | :--- |
-| **`[1]`** | **Mode 1: 3D Rotating Polygons** — Multi-colored polyhedron with directional lighting & depth |
-| **`[2]`** | **Mode 2: Cyberpunk Raymarched 3D Torus** — Volumetric signed distance field, neon reflections & ambient occlusion |
-| **`[3]`** | **Mode 3: Cosmic Psychedelic Plasma** — Real-time mathematical fluid waveforms |
-| **`[Space]`** | Cycle through shader modes |
-| **`Mouse Drag`** | Manually rotate and inspect the 3D geometry from any angle |
-| **`[Esc]`** | Smoothly close window and exit |
+To build and run the C example:
 
----
+```bash
+cargo build -p lgpu-c
+gcc -std=c99 examples/c_example/main.c -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o c_example
+./c_example
+```
 
-## 🗺️ Roadmap
+## Running Tests
 
-- [x] **Phase 0:** Cargo workspace scaffold & compile-time budget verification.
-- [x] **Phase 1:** `lgpu-hal` zero-dependency dynamic Vulkan loader.
-- [x] **Phase 2:** Headless compute pipeline, memory mapping & buffer readback.
-- [x] **Phase 3:** Global Bindless Resource Heap (unbounded descriptor array indexing).
-- [x] **Phase 4:** Modern Dynamic Rendering (`VK_KHR_dynamic_rendering` without RenderPasses).
-- [x] **Phase 5:** Metal 3 (macOS/iOS) & DirectX 12 (Windows) modern backend scaffolds.
-- [x] **Phase 6:** `lgpu-c` single-header C99 / Zig bindings (`crates/lgpu-c/include/lgpu.h`).
-- [x] **Phase 7:** 100,000 GPU-driven stress test showcase demo (`04_bindless_100k`).
-- [x] **Phase 8:** Interactive Desktop OS Window with 3D Polygons & Shaders (`05_window_shader` at 340+ FPS).
+Run the test suite across all crates:
 
----
+```bash
+cargo test --all
+cargo test --doc
+```
 
-## 📜 License
+## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

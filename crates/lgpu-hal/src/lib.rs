@@ -5,8 +5,12 @@
 
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
+#[cfg(feature = "metal")]
 pub mod metal;
+#[cfg(feature = "d3d12")]
 pub mod d3d12;
+pub mod backend;
+pub use backend::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -81,6 +85,36 @@ pub enum TextureFormat {
     Depth32Float,
 }
 
+#[cfg(feature = "vulkan")]
+impl TextureFormat {
+    pub fn to_vk(&self) -> ash::vk::Format {
+        match self {
+            TextureFormat::Rgba8Unorm => ash::vk::Format::R8G8B8A8_UNORM,
+            TextureFormat::Rgba8Srgb => ash::vk::Format::R8G8B8A8_SRGB,
+            TextureFormat::Bgra8Unorm => ash::vk::Format::B8G8R8A8_UNORM,
+            TextureFormat::Bgra8Srgb => ash::vk::Format::B8G8R8A8_SRGB,
+            TextureFormat::R32Float => ash::vk::Format::R32_SFLOAT,
+            TextureFormat::Rgba16Float => ash::vk::Format::R16G16B16A16_SFLOAT,
+            TextureFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
+            TextureFormat::Depth32Float => ash::vk::Format::D32_SFLOAT,
+        }
+    }
+
+    pub fn from_vk(format: ash::vk::Format) -> Option<Self> {
+        match format {
+            ash::vk::Format::R8G8B8A8_UNORM => Some(TextureFormat::Rgba8Unorm),
+            ash::vk::Format::R8G8B8A8_SRGB => Some(TextureFormat::Rgba8Srgb),
+            ash::vk::Format::B8G8R8A8_UNORM => Some(TextureFormat::Bgra8Unorm),
+            ash::vk::Format::B8G8R8A8_SRGB => Some(TextureFormat::Bgra8Srgb),
+            ash::vk::Format::R32_SFLOAT => Some(TextureFormat::R32Float),
+            ash::vk::Format::R16G16B16A16_SFLOAT => Some(TextureFormat::Rgba16Float),
+            ash::vk::Format::R32G32B32A32_SFLOAT => Some(TextureFormat::Rgba32Float),
+            ash::vk::Format::D32_SFLOAT => Some(TextureFormat::Depth32Float),
+            _ => None,
+        }
+    }
+}
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TextureUsage: u32 {
@@ -98,8 +132,25 @@ pub struct TextureDesc<'a> {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+    pub mip_levels: u32,
+    pub sample_count: u32,
     pub format: TextureFormat,
     pub usage: TextureUsage,
+}
+
+impl<'a> TextureDesc<'a> {
+    pub fn new_2d(width: u32, height: u32, format: TextureFormat, usage: TextureUsage) -> Self {
+        Self {
+            label: None,
+            width,
+            height,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            format,
+            usage,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +192,243 @@ impl Default for SamplerDesc<'_> {
 }
 
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoadOp<T> {
+    Clear(T),
+    Load,
+    DontCare,
+}
+
+pub type ColorLoadOp = LoadOp<[f32; 4]>;
+pub type DepthLoadOp = LoadOp<f32>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveTopology {
+    PointList,
+    LineList,
+    LineStrip,
+    TriangleList,
+    TriangleStrip,
+}
+
+#[cfg(feature = "vulkan")]
+impl PrimitiveTopology {
+    pub fn to_vk(&self) -> ash::vk::PrimitiveTopology {
+        match self {
+            PrimitiveTopology::PointList => ash::vk::PrimitiveTopology::POINT_LIST,
+            PrimitiveTopology::LineList => ash::vk::PrimitiveTopology::LINE_LIST,
+            PrimitiveTopology::LineStrip => ash::vk::PrimitiveTopology::LINE_STRIP,
+            PrimitiveTopology::TriangleList => ash::vk::PrimitiveTopology::TRIANGLE_LIST,
+            PrimitiveTopology::TriangleStrip => ash::vk::PrimitiveTopology::TRIANGLE_STRIP,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CullMode {
+    None,
+    Front,
+    Back,
+}
+
+#[cfg(feature = "vulkan")]
+impl CullMode {
+    pub fn to_vk(&self) -> ash::vk::CullModeFlags {
+        match self {
+            CullMode::None => ash::vk::CullModeFlags::NONE,
+            CullMode::Front => ash::vk::CullModeFlags::FRONT,
+            CullMode::Back => ash::vk::CullModeFlags::BACK,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontFace {
+    Ccw,
+    Cw,
+}
+
+#[cfg(feature = "vulkan")]
+impl FrontFace {
+    pub fn to_vk(&self) -> ash::vk::FrontFace {
+        match self {
+            FrontFace::Ccw => ash::vk::FrontFace::COUNTER_CLOCKWISE,
+            FrontFace::Cw => ash::vk::FrontFace::CLOCKWISE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveState {
+    pub topology: PrimitiveTopology,
+    pub cull_mode: CullMode,
+    pub front_face: FrontFace,
+}
+
+impl Default for PrimitiveState {
+    fn default() -> Self {
+        Self {
+            topology: PrimitiveTopology::TriangleList,
+            cull_mode: CullMode::None,
+            front_face: FrontFace::Cw,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendFactor {
+    Zero,
+    One,
+    SrcColor,
+    OneMinusSrcColor,
+    SrcAlpha,
+    OneMinusSrcAlpha,
+    DstColor,
+    OneMinusDstColor,
+    DstAlpha,
+    OneMinusDstAlpha,
+}
+
+#[cfg(feature = "vulkan")]
+impl BlendFactor {
+    pub fn to_vk(&self) -> ash::vk::BlendFactor {
+        match self {
+            BlendFactor::Zero => ash::vk::BlendFactor::ZERO,
+            BlendFactor::One => ash::vk::BlendFactor::ONE,
+            BlendFactor::SrcColor => ash::vk::BlendFactor::SRC_COLOR,
+            BlendFactor::OneMinusSrcColor => ash::vk::BlendFactor::ONE_MINUS_SRC_COLOR,
+            BlendFactor::SrcAlpha => ash::vk::BlendFactor::SRC_ALPHA,
+            BlendFactor::OneMinusSrcAlpha => ash::vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+            BlendFactor::DstColor => ash::vk::BlendFactor::DST_COLOR,
+            BlendFactor::OneMinusDstColor => ash::vk::BlendFactor::ONE_MINUS_DST_COLOR,
+            BlendFactor::DstAlpha => ash::vk::BlendFactor::DST_ALPHA,
+            BlendFactor::OneMinusDstAlpha => ash::vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendOp {
+    Add,
+    Subtract,
+    ReverseSubtract,
+    Min,
+    Max,
+}
+
+#[cfg(feature = "vulkan")]
+impl BlendOp {
+    pub fn to_vk(&self) -> ash::vk::BlendOp {
+        match self {
+            BlendOp::Add => ash::vk::BlendOp::ADD,
+            BlendOp::Subtract => ash::vk::BlendOp::SUBTRACT,
+            BlendOp::ReverseSubtract => ash::vk::BlendOp::REVERSE_SUBTRACT,
+            BlendOp::Min => ash::vk::BlendOp::MIN,
+            BlendOp::Max => ash::vk::BlendOp::MAX,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlendComponent {
+    pub src_factor: BlendFactor,
+    pub dst_factor: BlendFactor,
+    pub operation: BlendOp,
+}
+
+impl BlendComponent {
+    pub const REPLACE: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::Zero,
+        operation: BlendOp::Add,
+    };
+
+    pub const OVER: Self = Self {
+        src_factor: BlendFactor::One,
+        dst_factor: BlendFactor::OneMinusSrcAlpha,
+        operation: BlendOp::Add,
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlendState {
+    pub color: BlendComponent,
+    pub alpha: BlendComponent,
+}
+
+impl BlendState {
+    pub const REPLACE: Self = Self {
+        color: BlendComponent::REPLACE,
+        alpha: BlendComponent::REPLACE,
+    };
+
+    pub const ALPHA_BLENDING: Self = Self {
+        color: BlendComponent {
+            src_factor: BlendFactor::SrcAlpha,
+            dst_factor: BlendFactor::OneMinusSrcAlpha,
+            operation: BlendOp::Add,
+        },
+        alpha: BlendComponent {
+            src_factor: BlendFactor::One,
+            dst_factor: BlendFactor::OneMinusSrcAlpha,
+            operation: BlendOp::Add,
+        },
+    };
+
+    pub const PREMULTIPLIED_ALPHA_BLENDING: Self = Self {
+        color: BlendComponent::OVER,
+        alpha: BlendComponent::OVER,
+    };
+
+    pub const ADDITIVE: Self = Self {
+        color: BlendComponent {
+            src_factor: BlendFactor::One,
+            dst_factor: BlendFactor::One,
+            operation: BlendOp::Add,
+        },
+        alpha: BlendComponent {
+            src_factor: BlendFactor::One,
+            dst_factor: BlendFactor::One,
+            operation: BlendOp::Add,
+        },
+    };
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphicsPipelineDesc<'a> {
+    pub label: Option<&'a str>,
+    pub vs_entry: &'a str,
+    pub fs_entry: &'a str,
+    pub color_format: TextureFormat,
+    pub depth_format: Option<TextureFormat>,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub sample_count: u32,
+    pub primitive: PrimitiveState,
+    pub blend: Option<BlendState>,
+}
+
+impl<'a> GraphicsPipelineDesc<'a> {
+    pub fn new(
+        vs_entry: &'a str,
+        fs_entry: &'a str,
+        color_format: TextureFormat,
+    ) -> Self {
+        Self {
+            label: None,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format: None,
+            depth_test: false,
+            depth_write: false,
+            sample_count: 1,
+            primitive: PrimitiveState::default(),
+            blend: None,
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum HalError {
     #[error("Dynamic loader failed to load driver library: {0}")]
@@ -159,6 +447,8 @@ pub enum HalError {
     CommandError(String),
     #[error("Map buffer error: {0}")]
     MapError(String),
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
     #[error("Backend specific error: {0}")]
     BackendError(String),
 }

@@ -55,6 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -79,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Render Triangle (dark background [0.0, 0.0, 0.0, 1.0])
     let mut encoder = device.create_command_encoder()?;
-    encoder.render_triangle(&render_target, &pipeline, [0.0, 0.0, 0.0, 1.0]);
+    encoder.render_triangle(&render_target, &pipeline, [0.0, 0.0, 0.0, 1.0])?;
     encoder.copy_texture_to_buffer(&render_target, &readback_buf);
     queue.submit(encoder.finish())?;
 

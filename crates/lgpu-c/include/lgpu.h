@@ -30,6 +30,8 @@ typedef struct lgpu_texture_s*         lgpu_texture_t;
 typedef struct lgpu_sampler_s*         lgpu_sampler_t;
 typedef struct lgpu_graphics_pipeline_s* lgpu_graphics_pipeline_t;
 typedef struct lgpu_bindless_compute_pipeline_s* lgpu_bindless_compute_pipeline_t;
+typedef struct lgpu_surface_s*         lgpu_surface_t;
+typedef struct lgpu_surface_texture_s* lgpu_surface_texture_t;
 
 typedef struct lgpu_adapter_info {
     char name[256];
@@ -37,9 +39,10 @@ typedef struct lgpu_adapter_info {
     uint32_t device_type;
     uint32_t vendor_id;
     uint32_t device_id;
-    bool supports_dynamic_rendering;
-    bool supports_timeline_semaphores;
-    bool supports_descriptor_indexing;
+    uint8_t supports_dynamic_rendering;
+    uint8_t supports_timeline_semaphores;
+    uint8_t supports_descriptor_indexing;
+    uint8_t _padding;
     uint32_t max_compute_workgroup_invocations;
     uint32_t max_compute_workgroup_size[3];
 } lgpu_adapter_info_t;
@@ -103,6 +106,20 @@ typedef enum lgpu_address_mode {
     LGPU_ADDRESS_REPEAT = 1,
     LGPU_ADDRESS_MIRROR_REPEAT = 2,
 } lgpu_address_mode_t;
+
+typedef enum lgpu_present_mode {
+    LGPU_PRESENT_MODE_IMMEDIATE = 0,
+    LGPU_PRESENT_MODE_MAILBOX = 1,
+    LGPU_PRESENT_MODE_FIFO = 2,
+} lgpu_present_mode_t;
+
+typedef struct lgpu_surface_config {
+    uint32_t width;
+    uint32_t height;
+    lgpu_texture_format_t format;
+    lgpu_texture_usage_t usage;
+    lgpu_present_mode_t present_mode;
+} lgpu_surface_config_t;
 
 
 /* === API Functions === */
@@ -365,6 +382,57 @@ void lgpu_copy_texture_to_buffer(
     lgpu_buffer_t buffer
 );
 
+/** Copy buffer to buffer on GPU */
+void lgpu_copy_buffer_to_buffer(
+    lgpu_command_encoder_t encoder,
+    lgpu_buffer_t source,
+    uint64_t source_offset,
+    lgpu_buffer_t destination,
+    uint64_t destination_offset,
+    uint64_t size
+);
+
+/** Copy buffer pixel data to texture */
+void lgpu_copy_buffer_to_texture(
+    lgpu_command_encoder_t encoder,
+    lgpu_buffer_t buffer,
+    lgpu_texture_t texture
+);
+
+/** Record an indirect compute dispatch */
+lgpu_result_t lgpu_dispatch_indirect(
+    lgpu_command_encoder_t encoder,
+    lgpu_bindless_compute_pipeline_t pipeline,
+    lgpu_buffer_t indirect_buffer,
+    uint64_t indirect_offset,
+    const void* push_constants,
+    size_t push_constants_size
+);
+
+/** Draw indexed primitives */
+void lgpu_draw_indexed(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t texture,
+    lgpu_graphics_pipeline_t pipeline,
+    lgpu_buffer_t index_buffer,
+    uint32_t index_count,
+    uint32_t instance_count,
+    uint32_t first_index,
+    int32_t vertex_offset,
+    uint32_t first_instance,
+    const void* push_constants,
+    size_t push_constants_size,
+    const float clear_color[4]
+);
+
+/** Directly upload CPU memory to GPU texture */
+lgpu_result_t lgpu_device_write_texture(
+    lgpu_device_t device,
+    lgpu_texture_t texture,
+    const uint8_t* data,
+    size_t data_len
+);
+
 /** Get texture width */
 uint32_t lgpu_texture_get_width(lgpu_texture_t texture);
 
@@ -390,7 +458,81 @@ lgpu_result_t lgpu_dispatch_bindless_compute(
     uint32_t x, uint32_t y, uint32_t z
 );
 
+/** Wait for all device operations to complete */
+lgpu_result_t lgpu_device_wait_idle(lgpu_device_t device);
+
+/** Create a headless surface */
+lgpu_result_t lgpu_create_surface_headless(
+    lgpu_instance_t instance,
+    lgpu_surface_t* out_surface
+);
+
+/** Create an Xlib window surface */
+lgpu_result_t lgpu_create_surface_from_xlib(
+    lgpu_instance_t instance,
+    void* dpy,
+    unsigned long window,
+    lgpu_surface_t* out_surface
+);
+
+/** Create an XCB window surface */
+lgpu_result_t lgpu_create_surface_from_xcb(
+    lgpu_instance_t instance,
+    void* connection,
+    uint32_t window,
+    lgpu_surface_t* out_surface
+);
+
+/** Create a Wayland window surface */
+lgpu_result_t lgpu_create_surface_from_wayland(
+    lgpu_instance_t instance,
+    void* display,
+    void* surface,
+    lgpu_surface_t* out_surface
+);
+
+/** Create a Win32 window surface */
+lgpu_result_t lgpu_create_surface_from_win32(
+    lgpu_instance_t instance,
+    void* hinstance,
+    void* hwnd,
+    lgpu_surface_t* out_surface
+);
+
+/** Configure surface width, height, format, and present mode */
+lgpu_result_t lgpu_surface_configure(
+    lgpu_surface_t surface,
+    lgpu_device_t device,
+    const lgpu_surface_config_t* config
+);
+
+/** Acquire next swapchain surface texture */
+lgpu_result_t lgpu_surface_get_current_texture(
+    lgpu_surface_t surface,
+    lgpu_surface_texture_t* out_surface_texture
+);
+
+/** Get underlying texture handle from surface texture */
+lgpu_texture_t lgpu_surface_texture_get_texture(
+    lgpu_surface_texture_t surface_texture
+);
+
+/** Submit command buffer and present swapchain image */
+lgpu_result_t lgpu_queue_submit_surface(
+    lgpu_queue_t queue,
+    lgpu_command_buffer_t command_buffer,
+    lgpu_surface_texture_t surface_texture
+);
+
+/** Free surface texture wrapper */
+void lgpu_surface_texture_destroy(lgpu_surface_texture_t surface_texture);
+
+/** Destroy window surface */
+void lgpu_destroy_surface(lgpu_surface_t surface);
+
 /* === Resource Destruction === */
+void lgpu_destroy_command_encoder(lgpu_command_encoder_t encoder);
+void lgpu_destroy_command_buffer(lgpu_command_buffer_t command_buffer);
 void lgpu_destroy_buffer(lgpu_buffer_t buffer);
 void lgpu_destroy_texture(lgpu_texture_t texture);
 void lgpu_destroy_sampler(lgpu_sampler_t sampler);

@@ -123,6 +123,8 @@ fn test_command_pool_and_fence_recycling() {
         width: 32,
         height: 32,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -134,7 +136,7 @@ fn test_command_pool_and_fence_recycling() {
     for i in 0..100 {
         let mut encoder = device.create_command_encoder().expect("Failed to create encoder");
         let r = (i as f32) / 100.0;
-        encoder.clear_and_render_texture(&target, [r, 0.5, 0.2, 1.0]);
+        encoder.clear_and_render_texture(&target, [r, 0.5, 0.2, 1.0]).expect("clear failed");
         let cmd = encoder.finish();
         queue.submit(cmd).expect("Submit failed");
     }

@@ -134,7 +134,7 @@ impl RenderState {
                 36,
                 bytemuck::bytes_of(pc),
                 [0.06, 0.06, 0.10, 1.0], // Dark aesthetic deep navy background
-            );
+            )?;
         } else {
             // Mode 1: 3D Raymarched Neon Torus
             // Mode 2: Cosmic Psychedelic Plasma Waveform
@@ -144,7 +144,7 @@ impl RenderState {
                 3,
                 bytemuck::bytes_of(pc),
                 [0.0, 0.0, 0.0, 1.0],
-            );
+            )?;
         }
 
         encoder.transition_to_present(&frame.texture);

@@ -66,6 +66,8 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
         width: 128,
         height: 128,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -73,7 +75,7 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
 
     // Step 1: Submit async command buffer that signals timeline value 1 on GPU completion
     let mut encoder1 = device.create_command_encoder().expect("Failed to create encoder");
-    encoder1.clear_and_render_texture(&texture, [0.1, 0.2, 0.3, 1.0]);
+    encoder1.clear_and_render_texture(&texture, [0.1, 0.2, 0.3, 1.0]).expect("clear failed");
     encoder1.memory_barrier();
     let cmd1 = encoder1.finish();
 
@@ -90,7 +92,7 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
 
     // Step 2: Submit second async command buffer that waits for timeline value 1 and signals value 2
     let mut encoder2 = device.create_command_encoder().expect("Failed to create encoder");
-    encoder2.clear_and_render_texture(&texture, [0.4, 0.5, 0.6, 1.0]);
+    encoder2.clear_and_render_texture(&texture, [0.4, 0.5, 0.6, 1.0]).expect("clear failed");
     let cmd2 = encoder2.finish();
 
     queue
@@ -129,12 +131,14 @@ fn test_multithreaded_batch_submission() {
                 width: 64,
                 height: 64,
                 depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
                 format: TextureFormat::Rgba8Unorm,
                 usage: TextureUsage::RENDER_ATTACHMENT,
             };
             let tex = dev.create_texture(&tex_desc).expect("Failed to create texture");
             let c = (thread_idx as f32 + 1.0) * 0.2;
-            encoder.clear_and_render_texture(&tex, [c, c, c, 1.0]);
+            encoder.clear_and_render_texture(&tex, [c, c, c, 1.0]).expect("clear failed");
             (encoder.finish(), tex)
         });
         thread_handles.push(handle);

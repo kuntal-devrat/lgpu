@@ -21,6 +21,8 @@ fn test_bindless_texture_slot_allocation_and_recycling() {
         width: 64,
         height: 64,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::TEXTURE_BINDING | TextureUsage::COPY_DST,
     };
@@ -98,6 +100,8 @@ fn test_dynamic_rendering_with_depth_attachment() {
         width: 128,
         height: 128,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -109,6 +113,8 @@ fn test_dynamic_rendering_with_depth_attachment() {
         width: 128,
         height: 128,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Depth32Float,
         usage: TextureUsage::RENDER_ATTACHMENT,
     };
@@ -121,7 +127,7 @@ fn test_dynamic_rendering_with_depth_attachment() {
         &depth_tex,
         [0.05, 0.05, 0.1, 1.0],
         1.0, // Clear depth to 1.0
-    );
+    ).expect("clear failed");
 
     let cmd = encoder.finish();
     queue.submit(cmd).expect("Failed to submit clear_and_render_with_depth");
@@ -179,6 +185,8 @@ fn test_graphics_pipeline_with_depth_testing() {
         width: 128,
         height: 128,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -189,6 +197,8 @@ fn test_graphics_pipeline_with_depth_testing() {
         width: 128,
         height: 128,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Depth32Float,
         usage: TextureUsage::RENDER_ATTACHMENT,
     };
@@ -203,7 +213,7 @@ fn test_graphics_pipeline_with_depth_testing() {
         &[],
         [0.1, 0.2, 0.3, 1.0],
         1.0,
-    );
+    ).expect("draw failed");
 
     let cmd = encoder.finish();
     queue.submit(cmd).expect("Failed to submit draw_with_depth");

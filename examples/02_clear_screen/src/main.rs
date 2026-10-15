@@ -29,6 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
@@ -57,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Record dynamic rendering pass and copy
     let mut encoder = device.create_command_encoder()?;
-    encoder.clear_and_render_texture(&render_target, clear_color);
+    encoder.clear_and_render_texture(&render_target, clear_color)?;
     encoder.copy_texture_to_buffer(&render_target, &readback_buf);
     let cmd = encoder.finish();
 
