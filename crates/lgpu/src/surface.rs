@@ -110,7 +110,24 @@ impl Surface {
 
             let swapchain = swapchain_res?;
 
-            // Create per-frame-in-flight sync objects if not already allocated
+            // Drain previous sync objects on reconfiguration to ensure all fences are reset to SIGNALED
+            for acq in self.acquire_semaphores.drain(..) {
+                unsafe {
+                    vulkan_device.device.destroy_semaphore(acq, None);
+                }
+            }
+            for rend in self.render_semaphores.drain(..) {
+                unsafe {
+                    vulkan_device.device.destroy_semaphore(rend, None);
+                }
+            }
+            for fence in self.in_flight_fences.drain(..) {
+                unsafe {
+                    vulkan_device.device.destroy_fence(fence, None);
+                }
+            }
+
+            // Create per-frame-in-flight sync objects
             const MAX_FRAMES_IN_FLIGHT: usize = 2;
             if self.acquire_semaphores.is_empty() {
                 let sem_info = lgpu_hal::vulkan::vk::SemaphoreCreateInfo::default();

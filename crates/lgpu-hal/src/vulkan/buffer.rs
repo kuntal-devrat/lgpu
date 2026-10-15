@@ -10,6 +10,7 @@ pub struct VulkanBuffer {
     pub(crate) block_id: Option<usize>,
     pub(crate) offset: u64,
     pub(crate) size: u64,
+    pub(crate) allocated_size: u64,
     pub(crate) mapped_ptr: Option<*mut u8>,
     pub(crate) is_coherent: bool,
     pub(crate) sync_lock: std::sync::Mutex<()>,
@@ -107,6 +108,7 @@ impl VulkanDevice {
             block_id: alloc.block_id,
             offset: alloc.offset,
             size: desc.size,
+            allocated_size: mem_reqs.size,
             mapped_ptr: alloc.mapped_ptr,
             is_coherent: alloc.is_coherent,
             sync_lock: std::sync::Mutex::new(()),
@@ -210,7 +212,7 @@ impl VulkanDevice {
                 self.allocator
                     .lock()
                     .unwrap()
-                    .free(block_id, buffer.offset, buffer.size);
+                    .free(block_id, buffer.offset, buffer.allocated_size);
             } else {
                 self.device.free_memory(buffer.memory, None);
             }

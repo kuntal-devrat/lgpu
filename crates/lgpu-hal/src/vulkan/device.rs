@@ -61,8 +61,21 @@ impl VulkanDevice {
         unsafe {
             self.device
                 .device_wait_idle()
-                .map_err(|e| HalError::BackendError(format!("device_wait_idle failed: {e}")))
+                .map_err(|e| HalError::BackendError(format!("device_wait_idle failed: {e}")))?;
         }
+        let mut pending = self.pending_async_recorders.lock().unwrap();
+        let mut cache = self.command_recorder_cache.lock().unwrap();
+        for (_, recorders) in pending.drain(..) {
+            for r in recorders {
+                unsafe {
+                    self.device
+                        .reset_command_buffer(r.command_buffer, vk::CommandBufferResetFlags::empty())
+                        .ok();
+                }
+                cache.push((r.command_pool, r.command_buffer));
+            }
+        }
+        Ok(())
     }
 }
 

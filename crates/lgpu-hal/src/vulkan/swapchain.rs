@@ -260,9 +260,24 @@ impl VulkanDevice {
             .base_array_layer(0)
             .layer_count(1);
 
+        let (src_stage, src_access) = match old_layout {
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            ),
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
+                vk::PipelineStageFlags2::TRANSFER,
+                vk::AccessFlags2::TRANSFER_READ,
+            ),
+            _ => (
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags2::TRANSFER,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE | vk::AccessFlags2::TRANSFER_READ,
+            ),
+        };
+
         let barrier = vk::ImageMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
             .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
             .dst_access_mask(vk::AccessFlags2::empty())
             .old_layout(old_layout)
