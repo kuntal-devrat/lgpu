@@ -1,7 +1,7 @@
 //! C FFI null-safety, explicit handle destruction, and parameter validation tests.
 
-use std::ptr;
 use lgpu_c::*;
+use std::ptr;
 
 #[test]
 fn test_c_destroy_functions_and_null_safety() {

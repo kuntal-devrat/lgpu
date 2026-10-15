@@ -87,8 +87,15 @@ impl RenderState {
         })
     }
 
-    fn resize(&mut self, new_width: u32, new_height: u32) -> Result<(), Box<dyn std::error::Error>> {
-        if new_width == 0 || new_height == 0 || (new_width == self.width && new_height == self.height) {
+    fn resize(
+        &mut self,
+        new_width: u32,
+        new_height: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if new_width == 0
+            || new_height == 0
+            || (new_width == self.width && new_height == self.height)
+        {
             return Ok(());
         }
         self.width = new_width;
@@ -104,11 +111,7 @@ impl RenderState {
         Ok(())
     }
 
-    fn render(
-        &mut self,
-        pc: &PushConstants,
-        mode: u32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn render(&mut self, pc: &PushConstants, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(_) => {
@@ -168,7 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = &adapters[0];
     let gpu_info = adapter.info();
     println!("GPU Device: {} ({:?})", gpu_info.name, gpu_info.device_type);
-    println!("Backend: {:?}, Dynamic Rendering: {}", gpu_info.backend, gpu_info.supports_dynamic_rendering);
+    println!(
+        "Backend: {:?}, Dynamic Rendering: {}",
+        gpu_info.backend, gpu_info.supports_dynamic_rendering
+    );
 
     let (device, queue) = adapter.request_device(&instance)?;
 
@@ -304,12 +310,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let title = format!(
                             "lgpu | {} | {} FPS | GPU: {}",
-                            mode_names[current_mode as usize],
-                            fps,
-                            gpu_info.name
+                            mode_names[current_mode as usize], fps, gpu_info.name
                         );
                         window.set_title(&title);
-                        println!("[lgpu Window] Rendered {} FPS | {}", fps, mode_names[current_mode as usize]);
+                        println!(
+                            "[lgpu Window] Rendered {} FPS | {}",
+                            fps, mode_names[current_mode as usize]
+                        );
                     }
 
                     // Render GPU Frame

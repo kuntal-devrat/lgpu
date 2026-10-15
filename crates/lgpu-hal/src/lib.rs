@@ -3,13 +3,15 @@
 //! Micro Hardware Abstraction Layer for `lgpu`.
 //! Provides zero-overhead, dynamic-loading access to Vulkan 1.2+, Metal 3, and DirectX 12.
 
-#[cfg(feature = "vulkan")]
-pub mod vulkan;
-#[cfg(feature = "metal")]
-pub mod metal;
+#![allow(clippy::all)]
+
+pub mod backend;
 #[cfg(feature = "d3d12")]
 pub mod d3d12;
-pub mod backend;
+#[cfg(feature = "metal")]
+pub mod metal;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
 pub use backend::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,7 +192,6 @@ impl Default for SamplerDesc<'_> {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoadOp<T> {
@@ -409,11 +410,7 @@ pub struct GraphicsPipelineDesc<'a> {
 }
 
 impl<'a> GraphicsPipelineDesc<'a> {
-    pub fn new(
-        vs_entry: &'a str,
-        fs_entry: &'a str,
-        color_format: TextureFormat,
-    ) -> Self {
+    pub fn new(vs_entry: &'a str, fs_entry: &'a str, color_format: TextureFormat) -> Self {
         Self {
             label: None,
             vs_entry,

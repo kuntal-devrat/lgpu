@@ -1,10 +1,10 @@
 //! GPU instance and adapter management.
 
-use std::sync::Arc;
 use crate::{
-    AdapterInfo, Device, Error, HalError, HasDisplayHandle, HasWindowHandle,
-    Queue, RawDisplayHandle, RawWindowHandle, Surface,
+    AdapterInfo, Device, Error, HalError, HasDisplayHandle, HasWindowHandle, Queue,
+    RawDisplayHandle, RawWindowHandle, Surface,
 };
+use std::sync::Arc;
 
 pub struct Instance {
     #[cfg(feature = "vulkan")]
@@ -89,7 +89,9 @@ impl Instance {
     ) -> Result<Surface, Error> {
         #[cfg(feature = "vulkan")]
         {
-            let raw_surface = self.vulkan_instance.create_surface(display_handle, window_handle)?;
+            let raw_surface = self
+                .vulkan_instance
+                .create_surface(display_handle, window_handle)?;
             Ok(Surface {
                 instance: Arc::clone(&self.vulkan_instance),
                 raw_surface,
@@ -105,7 +107,10 @@ impl Instance {
         #[cfg(not(feature = "vulkan"))]
         {
             let _ = (display_handle, window_handle);
-            Err(HalError::BackendError("Vulkan not enabled for surface creation".to_string()).into())
+            Err(
+                HalError::BackendError("Vulkan not enabled for surface creation".to_string())
+                    .into(),
+            )
         }
     }
 
@@ -127,7 +132,10 @@ impl Instance {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            Err(HalError::BackendError("Vulkan not enabled for surface creation".to_string()).into())
+            Err(
+                HalError::BackendError("Vulkan not enabled for surface creation".to_string())
+                    .into(),
+            )
         }
     }
 }

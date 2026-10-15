@@ -1,12 +1,12 @@
 //! Logical GPU device and queue submission.
 
-use std::sync::Arc;
 use crate::{
     BindlessComputePipeline, Buffer, BufferDesc, BufferId, CommandBuffer, CommandEncoder,
-    ComputePipeline, Error, GraphicsPipeline, Sampler, SamplerDesc, SamplerId,
-    Shader, SurfaceTexture, Texture, TextureDesc, TextureFormat, TextureId,
-    TextureUsage, TimelineSemaphore,
+    ComputePipeline, Error, GraphicsPipeline, Sampler, SamplerDesc, SamplerId, Shader,
+    SurfaceTexture, Texture, TextureDesc, TextureFormat, TextureId, TextureUsage,
+    TimelineSemaphore,
 };
+use std::sync::Arc;
 
 pub struct Device {
     #[cfg(feature = "vulkan")]
@@ -41,7 +41,9 @@ impl Device {
         {
             let hal_buffer = self.vulkan_device.create_buffer(desc)?;
             let id = if self.vulkan_device.bindless_heap.is_some() {
-                Some(BufferId(self.vulkan_device.register_bindless_buffer(&hal_buffer)?))
+                Some(BufferId(
+                    self.vulkan_device.register_bindless_buffer(&hal_buffer)?,
+                ))
             } else {
                 None
             };
@@ -264,7 +266,15 @@ impl Device {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (shader, vs_entry, fs_entry, color_format, depth_format, depth_test, depth_write);
+            let _ = (
+                shader,
+                vs_entry,
+                fs_entry,
+                color_format,
+                depth_format,
+                depth_test,
+                depth_write,
+            );
             Err(HalError::NoAdapterFound.into())
         }
     }
@@ -277,7 +287,9 @@ impl Device {
         #[cfg(feature = "vulkan")]
         {
             let raw_shader = shader.hal_shader.as_ref().unwrap();
-            let pipeline = self.vulkan_device.create_graphics_pipeline_with_desc(raw_shader, desc)?;
+            let pipeline = self
+                .vulkan_device
+                .create_graphics_pipeline_with_desc(raw_shader, desc)?;
             Ok(GraphicsPipeline {
                 pipeline: Some(pipeline),
                 vulkan_device: Arc::clone(&self.vulkan_device),
@@ -314,10 +326,15 @@ impl Device {
         }
     }
 
-    pub fn create_timeline_semaphore(&self, initial_value: u64) -> Result<TimelineSemaphore, Error> {
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<TimelineSemaphore, Error> {
         #[cfg(feature = "vulkan")]
         {
-            let hal_semaphore = self.vulkan_device.create_timeline_semaphore(initial_value)?;
+            let hal_semaphore = self
+                .vulkan_device
+                .create_timeline_semaphore(initial_value)?;
             Ok(TimelineSemaphore {
                 hal_semaphore: Some(hal_semaphore),
                 vulkan_device: Arc::clone(&self.vulkan_device),
@@ -446,10 +463,11 @@ impl Queue {
                 .iter()
                 .map(|(s, v)| (s.hal_semaphore.as_ref().unwrap(), *v))
                 .collect();
-            let raw_signal: Vec<(&lgpu_hal::vulkan::VulkanTimelineSemaphore, u64)> = signal_semaphores
-                .iter()
-                .map(|(s, v)| (s.hal_semaphore.as_ref().unwrap(), *v))
-                .collect();
+            let raw_signal: Vec<(&lgpu_hal::vulkan::VulkanTimelineSemaphore, u64)> =
+                signal_semaphores
+                    .iter()
+                    .map(|(s, v)| (s.hal_semaphore.as_ref().unwrap(), *v))
+                    .collect();
             self.vulkan_device
                 .submit_batches_async(recorders, &raw_wait, &raw_signal)?;
             Ok(())

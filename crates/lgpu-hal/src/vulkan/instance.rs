@@ -1,14 +1,12 @@
 //! Vulkan instance, physical device adapters, and surface creation.
 
-use ash::vk;
-use ash::khr::{surface, swapchain, xlib_surface, xcb_surface, wayland_surface, win32_surface};
 use ash::ext::{headless_surface, metal_surface};
+use ash::khr::{surface, swapchain, wayland_surface, win32_surface, xcb_surface, xlib_surface};
+use ash::vk;
 use std::ffi::CString;
 
-use crate::{
-    AdapterInfo, Backend, DeviceType, HalError,
-};
 use super::{allocator, bindless, VulkanDevice};
+use crate::{AdapterInfo, Backend, DeviceType, HalError};
 
 pub struct VulkanInstance {
     pub entry: ash::Entry,
@@ -26,9 +24,8 @@ pub struct VulkanAdapter {
 
 impl VulkanInstance {
     pub fn new() -> Result<Self, HalError> {
-        let entry = unsafe {
-            ash::Entry::load().map_err(|e| HalError::LibraryLoadError(e.to_string()))?
-        };
+        let entry =
+            unsafe { ash::Entry::load().map_err(|e| HalError::LibraryLoadError(e.to_string()))? };
 
         let app_name = CString::new("lgpu Application").unwrap();
         let engine_name = CString::new("lgpu").unwrap();
@@ -41,12 +38,14 @@ impl VulkanInstance {
             .api_version(vk::API_VERSION_1_3);
 
         let supported_extensions = unsafe {
-            entry.enumerate_instance_extension_properties(None).unwrap_or_default()
+            entry
+                .enumerate_instance_extension_properties(None)
+                .unwrap_or_default()
         };
         let is_ext_supported = |name: &std::ffi::CStr| {
-            supported_extensions.iter().any(|ext| {
-                unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) == name }
-            })
+            supported_extensions
+                .iter()
+                .any(|ext| unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) == name })
         };
 
         let mut enabled_extensions = Vec::new();
@@ -89,9 +88,9 @@ impl VulkanInstance {
             .enabled_extension_names(&enabled_extensions);
 
         let instance = unsafe {
-            entry
-                .create_instance(&create_info, None)
-                .map_err(|e| HalError::BackendError(format!("Failed to create Vulkan instance: {e}")))?
+            entry.create_instance(&create_info, None).map_err(|e| {
+                HalError::BackendError(format!("Failed to create Vulkan instance: {e}"))
+            })?
         };
 
         let surface_loader = if is_ext_supported(surface::NAME) {
@@ -125,41 +124,56 @@ impl VulkanInstance {
             (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => {
                 let xlib_loader = xlib_surface::Instance::new(&self.entry, &self.instance);
                 let create_info = vk::XlibSurfaceCreateInfoKHR::default()
-                    .dpy(display.display.map(|p| p.as_ptr() as *mut _).unwrap_or(std::ptr::null_mut()))
+                    .dpy(
+                        display
+                            .display
+                            .map(|p| p.as_ptr() as *mut _)
+                            .unwrap_or(std::ptr::null_mut()),
+                    )
                     .window(window.window as vk::Window);
-                unsafe { xlib_loader.create_xlib_surface(&create_info, None) }
-                    .map_err(|e| HalError::BackendError(format!("Failed to create Xlib surface: {e}")))
+                unsafe { xlib_loader.create_xlib_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create Xlib surface: {e}"))
+                })
             }
             (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => {
                 let xcb_loader = xcb_surface::Instance::new(&self.entry, &self.instance);
                 let create_info = vk::XcbSurfaceCreateInfoKHR::default()
-                    .connection(display.connection.map(|p| p.as_ptr() as *mut _).unwrap_or(std::ptr::null_mut()))
+                    .connection(
+                        display
+                            .connection
+                            .map(|p| p.as_ptr() as *mut _)
+                            .unwrap_or(std::ptr::null_mut()),
+                    )
                     .window(window.window.get());
-                unsafe { xcb_loader.create_xcb_surface(&create_info, None) }
-                    .map_err(|e| HalError::BackendError(format!("Failed to create XCB surface: {e}")))
+                unsafe { xcb_loader.create_xcb_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create XCB surface: {e}"))
+                })
             }
             (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) => {
                 let wayland_loader = wayland_surface::Instance::new(&self.entry, &self.instance);
                 let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
                     .display(display.display.as_ptr() as *mut _)
                     .surface(window.surface.as_ptr() as *mut _);
-                unsafe { wayland_loader.create_wayland_surface(&create_info, None) }
-                    .map_err(|e| HalError::BackendError(format!("Failed to create Wayland surface: {e}")))
+                unsafe { wayland_loader.create_wayland_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create Wayland surface: {e}"))
+                })
             }
             (RawDisplayHandle::Windows(_), RawWindowHandle::Win32(window)) => {
                 let win32_loader = win32_surface::Instance::new(&self.entry, &self.instance);
                 let create_info = vk::Win32SurfaceCreateInfoKHR::default()
                     .hinstance(window.hinstance.map(|p| p.get() as isize).unwrap_or(0))
                     .hwnd(window.hwnd.get() as isize);
-                unsafe { win32_loader.create_win32_surface(&create_info, None) }
-                    .map_err(|e| HalError::BackendError(format!("Failed to create Win32 surface: {e}")))
+                unsafe { win32_loader.create_win32_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create Win32 surface: {e}"))
+                })
             }
             (RawDisplayHandle::AppKit(_), RawWindowHandle::AppKit(window)) => {
                 let metal_loader = metal_surface::Instance::new(&self.entry, &self.instance);
                 let create_info = vk::MetalSurfaceCreateInfoEXT::default()
                     .layer(window.ns_view.as_ptr() as *const _);
-                unsafe { metal_loader.create_metal_surface(&create_info, None) }
-                    .map_err(|e| HalError::BackendError(format!("Failed to create Metal surface: {e}")))
+                unsafe { metal_loader.create_metal_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create Metal surface: {e}"))
+                })
             }
             _ => Err(HalError::BackendError(
                 "Unsupported display/window handle pair for Vulkan surface creation".to_string(),
@@ -190,8 +204,10 @@ impl VulkanInstance {
         for pd in physical_devices {
             let props = unsafe { self.instance.get_physical_device_properties(pd) };
             let mem_props = unsafe { self.instance.get_physical_device_memory_properties(pd) };
-            let queue_props =
-                unsafe { self.instance.get_physical_device_queue_family_properties(pd) };
+            let queue_props = unsafe {
+                self.instance
+                    .get_physical_device_queue_family_properties(pd)
+            };
 
             // Find a queue family that supports both graphics and compute (or at least compute)
             let mut selected_queue = None;
@@ -238,16 +254,18 @@ impl VulkanInstance {
                         .push_next(&mut features12)
                         .push_next(&mut features13);
                     unsafe {
-                        self.instance.get_physical_device_features2(pd, &mut features2);
+                        self.instance
+                            .get_physical_device_features2(pd, &mut features2);
                     }
                     supports_dynamic_rendering = features13.dynamic_rendering == vk::TRUE;
                     supports_timeline_semaphores = features12.timeline_semaphore == vk::TRUE;
                     supports_descriptor_indexing = features12.descriptor_indexing == vk::TRUE;
                 } else if props.api_version >= vk::make_api_version(0, 1, 2, 0) {
-                    let mut features2 = vk::PhysicalDeviceFeatures2::default()
-                        .push_next(&mut features12);
+                    let mut features2 =
+                        vk::PhysicalDeviceFeatures2::default().push_next(&mut features12);
                     unsafe {
-                        self.instance.get_physical_device_features2(pd, &mut features2);
+                        self.instance
+                            .get_physical_device_features2(pd, &mut features2);
                     }
                     supports_timeline_semaphores = features12.timeline_semaphore == vk::TRUE;
                     supports_descriptor_indexing = features12.descriptor_indexing == vk::TRUE;
@@ -266,13 +284,19 @@ impl VulkanInstance {
                 })
             };
 
-            if !supports_dynamic_rendering && is_dev_ext_supported_bytes(b"VK_KHR_dynamic_rendering\0") {
+            if !supports_dynamic_rendering
+                && is_dev_ext_supported_bytes(b"VK_KHR_dynamic_rendering\0")
+            {
                 supports_dynamic_rendering = true;
             }
-            if !supports_timeline_semaphores && is_dev_ext_supported_bytes(b"VK_KHR_timeline_semaphore\0") {
+            if !supports_timeline_semaphores
+                && is_dev_ext_supported_bytes(b"VK_KHR_timeline_semaphore\0")
+            {
                 supports_timeline_semaphores = true;
             }
-            if !supports_descriptor_indexing && is_dev_ext_supported_bytes(b"VK_EXT_descriptor_indexing\0") {
+            if !supports_descriptor_indexing
+                && is_dev_ext_supported_bytes(b"VK_EXT_descriptor_indexing\0")
+            {
                 supports_descriptor_indexing = true;
             }
 
@@ -285,9 +309,7 @@ impl VulkanInstance {
                 supports_dynamic_rendering,
                 supports_timeline_semaphores,
                 supports_descriptor_indexing,
-                max_compute_workgroup_invocations: props
-                    .limits
-                    .max_compute_work_group_invocations,
+                max_compute_workgroup_invocations: props.limits.max_compute_work_group_invocations,
                 max_compute_workgroup_size: props.limits.max_compute_work_group_size,
             };
 
@@ -332,11 +354,11 @@ impl VulkanInstance {
             self.instance
                 .enumerate_device_extension_properties(adapter.physical_device)
                 .unwrap_or_default()
-            };
+        };
         let is_dev_ext_supported = |name: &std::ffi::CStr| {
-            supported_dev_extensions.iter().any(|ext| {
-                unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) == name }
-            })
+            supported_dev_extensions
+                .iter()
+                .any(|ext| unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) == name })
         };
 
         let mut enabled_extensions = Vec::new();
@@ -382,7 +404,8 @@ impl VulkanInstance {
             bindless::DEFAULT_MAX_STORAGE_BUFFERS,
             bindless::DEFAULT_MAX_TEXTURES,
             bindless::DEFAULT_MAX_SAMPLERS,
-        ).ok();
+        )
+        .ok();
 
         let mut type_info = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -391,14 +414,20 @@ impl VulkanInstance {
         let internal_frame_semaphore = unsafe {
             device
                 .create_semaphore(&sem_create_info, None)
-                .map_err(|e| HalError::DeviceCreationFailed(format!("Failed to create internal timeline semaphore: {e}")))?
+                .map_err(|e| {
+                    HalError::DeviceCreationFailed(format!(
+                        "Failed to create internal timeline semaphore: {e}"
+                    ))
+                })?
         };
 
         let pipeline_cache = unsafe {
             let cache_info = vk::PipelineCacheCreateInfo::default();
             device
                 .create_pipeline_cache(&cache_info, None)
-                .map_err(|e| HalError::DeviceCreationFailed(format!("Failed to create pipeline cache: {e}")))?
+                .map_err(|e| {
+                    HalError::DeviceCreationFailed(format!("Failed to create pipeline cache: {e}"))
+                })?
         };
 
         Ok(VulkanDevice {

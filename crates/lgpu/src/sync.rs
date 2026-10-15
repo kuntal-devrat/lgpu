@@ -1,7 +1,7 @@
 //! GPU timeline semaphores and fine-grained CPU-GPU synchronization.
 
-use std::sync::Arc;
 use crate::Error;
+use std::sync::Arc;
 
 pub struct TimelineSemaphore {
     #[cfg(feature = "vulkan")]
@@ -28,7 +28,8 @@ impl TimelineSemaphore {
         #[cfg(feature = "vulkan")]
         {
             let raw_sem = self.hal_semaphore.as_ref().unwrap();
-            self.vulkan_device.wait_timeline_semaphore(raw_sem, value, timeout_nanos)?;
+            self.vulkan_device
+                .wait_timeline_semaphore(raw_sem, value, timeout_nanos)?;
             Ok(())
         }
         #[cfg(not(feature = "vulkan"))]
@@ -42,7 +43,8 @@ impl TimelineSemaphore {
         #[cfg(feature = "vulkan")]
         {
             let raw_sem = self.hal_semaphore.as_ref().unwrap();
-            self.vulkan_device.signal_timeline_semaphore(raw_sem, value)?;
+            self.vulkan_device
+                .signal_timeline_semaphore(raw_sem, value)?;
             Ok(())
         }
         #[cfg(not(feature = "vulkan"))]

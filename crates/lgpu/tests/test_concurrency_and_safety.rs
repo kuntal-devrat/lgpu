@@ -48,11 +48,15 @@ fn test_send_sync_type_invariants() {
 #[test]
 fn test_concurrent_buffer_access_and_synchronization() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
     if adapters.is_empty() {
         return;
     }
-    let (device, _) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let (device, _) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let size = 1024u64;
     let buffer = Arc::new(
@@ -78,10 +82,14 @@ fn test_concurrent_buffer_access_and_synchronization() {
             let offset = (thread_idx * 128) as u64;
             let write_val = (thread_idx + 1) as u8;
             let chunk = vec![write_val; 128];
-            buf_clone.write_at(offset, &chunk).expect("concurrent write failed");
+            buf_clone
+                .write_at(offset, &chunk)
+                .expect("concurrent write failed");
 
             let mut read_back = vec![0u8; 128];
-            buf_clone.read_at(offset, &mut read_back).expect("concurrent read failed");
+            buf_clone
+                .read_at(offset, &mut read_back)
+                .expect("concurrent read failed");
             assert_eq!(read_back, chunk);
         }));
     }
@@ -103,11 +111,15 @@ fn test_concurrent_buffer_access_and_synchronization() {
 #[test]
 fn test_concurrent_texture_layout_protection() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
     if adapters.is_empty() {
         return;
     }
-    let (device, _) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let (device, _) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let texture = Arc::new(
         device

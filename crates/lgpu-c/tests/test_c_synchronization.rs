@@ -1,7 +1,7 @@
 //! Integration tests for C FFI timeline semaphores and pipeline barriers.
 
-use std::ptr;
 use lgpu_c::*;
+use std::ptr;
 
 #[test]
 fn test_c_ffi_timeline_semaphores_and_barriers() {

@@ -24,14 +24,22 @@ fn test_metal_backend_complete_bindless_and_storage() {
             usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
             memory_location: MemoryLocation::CpuToGpu,
         };
-        let buf1 = device.create_buffer(&buf_desc).expect("Create buffer failed");
-        let slot1 = device.register_bindless_buffer(&buf1).expect("Register slot 1");
+        let buf1 = device
+            .create_buffer(&buf_desc)
+            .expect("Create buffer failed");
+        let slot1 = device
+            .register_bindless_buffer(&buf1)
+            .expect("Register slot 1");
         assert_eq!(slot1, 0);
 
         let data = vec![42u8; 128];
-        device.write_buffer(&buf1, 10, &data).expect("write_buffer failed");
+        device
+            .write_buffer(&buf1, 10, &data)
+            .expect("write_buffer failed");
         let mut readback = vec![0u8; 128];
-        device.read_buffer(&buf1, 10, &mut readback).expect("read_buffer failed");
+        device
+            .read_buffer(&buf1, 10, &mut readback)
+            .expect("read_buffer failed");
         assert_eq!(readback, data);
 
         // 2. Test Second Buffer Slot Increment
@@ -41,15 +49,26 @@ fn test_metal_backend_complete_bindless_and_storage() {
             usage: BufferUsage::STORAGE,
             memory_location: MemoryLocation::GpuOnly,
         };
-        let buf2 = device.create_buffer(&buf_desc2).expect("Create buffer 2 failed");
-        let slot2 = device.register_bindless_buffer(&buf2).expect("Register slot 2");
+        let buf2 = device
+            .create_buffer(&buf_desc2)
+            .expect("Create buffer 2 failed");
+        let slot2 = device
+            .register_bindless_buffer(&buf2)
+            .expect("Register slot 2");
         assert_eq!(slot2, 1);
 
         // 3. Test Recycling of Slot
         device.unregister_bindless_buffer(slot1);
-        let buf3 = device.create_buffer(&buf_desc2).expect("Create buffer 3 failed");
-        let slot3 = device.register_bindless_buffer(&buf3).expect("Register slot 3");
-        assert_eq!(slot3, slot1, "Recycled LIFO slot should match unallocated slot");
+        let buf3 = device
+            .create_buffer(&buf_desc2)
+            .expect("Create buffer 3 failed");
+        let slot3 = device
+            .register_bindless_buffer(&buf3)
+            .expect("Register slot 3");
+        assert_eq!(
+            slot3, slot1,
+            "Recycled LIFO slot should match unallocated slot"
+        );
 
         // 4. Test Texture Allocation and Bindless Slot
         let tex_desc = TextureDesc {
@@ -62,8 +81,12 @@ fn test_metal_backend_complete_bindless_and_storage() {
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsage::TEXTURE_BINDING | TextureUsage::RENDER_ATTACHMENT,
         };
-        let tex = device.create_texture(&tex_desc).expect("Create texture failed");
-        let tex_slot = device.register_bindless_texture(&tex).expect("Register texture failed");
+        let tex = device
+            .create_texture(&tex_desc)
+            .expect("Create texture failed");
+        let tex_slot = device
+            .register_bindless_texture(&tex)
+            .expect("Register texture failed");
         assert_eq!(tex_slot, 0);
         device.unregister_bindless_texture(tex_slot);
 
@@ -77,8 +100,12 @@ fn test_metal_backend_complete_bindless_and_storage() {
             min_filter: FilterMode::Linear,
             mipmap_filter: FilterMode::Linear,
         };
-        let sampler = device.create_sampler(&sampler_desc).expect("Create sampler failed");
-        let sampler_slot = device.register_bindless_sampler(&sampler).expect("Register sampler failed");
+        let sampler = device
+            .create_sampler(&sampler_desc)
+            .expect("Create sampler failed");
+        let sampler_slot = device
+            .register_bindless_sampler(&sampler)
+            .expect("Register sampler failed");
         assert_eq!(sampler_slot, 0);
         device.unregister_bindless_sampler(sampler_slot);
     }
@@ -102,14 +129,22 @@ fn test_d3d12_backend_complete_bindless_and_storage() {
             usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
             memory_location: MemoryLocation::CpuToGpu,
         };
-        let buf1 = device.create_buffer(&buf_desc).expect("Create buffer failed");
-        let slot1 = device.register_bindless_buffer(&buf1).expect("Register slot 1");
+        let buf1 = device
+            .create_buffer(&buf_desc)
+            .expect("Create buffer failed");
+        let slot1 = device
+            .register_bindless_buffer(&buf1)
+            .expect("Register slot 1");
         assert_eq!(slot1, 0);
 
         let data = vec![99u8; 256];
-        device.write_buffer(&buf1, 32, &data).expect("write_buffer failed");
+        device
+            .write_buffer(&buf1, 32, &data)
+            .expect("write_buffer failed");
         let mut readback = vec![0u8; 256];
-        device.read_buffer(&buf1, 32, &mut readback).expect("read_buffer failed");
+        device
+            .read_buffer(&buf1, 32, &mut readback)
+            .expect("read_buffer failed");
         assert_eq!(readback, data);
 
         // 2. Test Second Buffer Slot Increment
@@ -119,15 +154,26 @@ fn test_d3d12_backend_complete_bindless_and_storage() {
             usage: BufferUsage::STORAGE,
             memory_location: MemoryLocation::GpuOnly,
         };
-        let buf2 = device.create_buffer(&buf_desc2).expect("Create buffer 2 failed");
-        let slot2 = device.register_bindless_buffer(&buf2).expect("Register slot 2");
+        let buf2 = device
+            .create_buffer(&buf_desc2)
+            .expect("Create buffer 2 failed");
+        let slot2 = device
+            .register_bindless_buffer(&buf2)
+            .expect("Register slot 2");
         assert_eq!(slot2, 1);
 
         // 3. Test Recycling of Slot
         device.unregister_bindless_buffer(slot1);
-        let buf3 = device.create_buffer(&buf_desc2).expect("Create buffer 3 failed");
-        let slot3 = device.register_bindless_buffer(&buf3).expect("Register slot 3");
-        assert_eq!(slot3, slot1, "Recycled LIFO slot should match unallocated slot");
+        let buf3 = device
+            .create_buffer(&buf_desc2)
+            .expect("Create buffer 3 failed");
+        let slot3 = device
+            .register_bindless_buffer(&buf3)
+            .expect("Register slot 3");
+        assert_eq!(
+            slot3, slot1,
+            "Recycled LIFO slot should match unallocated slot"
+        );
 
         // 4. Test Texture Allocation and Bindless Slot
         let tex_desc = TextureDesc {
@@ -140,8 +186,12 @@ fn test_d3d12_backend_complete_bindless_and_storage() {
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsage::TEXTURE_BINDING | TextureUsage::RENDER_ATTACHMENT,
         };
-        let tex = device.create_texture(&tex_desc).expect("Create texture failed");
-        let tex_slot = device.register_bindless_texture(&tex).expect("Register texture failed");
+        let tex = device
+            .create_texture(&tex_desc)
+            .expect("Create texture failed");
+        let tex_slot = device
+            .register_bindless_texture(&tex)
+            .expect("Register texture failed");
         assert_eq!(tex_slot, 0);
         device.unregister_bindless_texture(tex_slot);
 
@@ -155,8 +205,12 @@ fn test_d3d12_backend_complete_bindless_and_storage() {
             min_filter: FilterMode::Nearest,
             mipmap_filter: FilterMode::Nearest,
         };
-        let sampler = device.create_sampler(&sampler_desc).expect("Create sampler failed");
-        let sampler_slot = device.register_bindless_sampler(&sampler).expect("Register sampler failed");
+        let sampler = device
+            .create_sampler(&sampler_desc)
+            .expect("Create sampler failed");
+        let sampler_slot = device
+            .register_bindless_sampler(&sampler)
+            .expect("Register sampler failed");
         assert_eq!(sampler_slot, 0);
         device.unregister_bindless_sampler(sampler_slot);
     }

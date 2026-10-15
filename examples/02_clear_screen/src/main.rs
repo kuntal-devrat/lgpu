@@ -72,11 +72,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify first 16 pixels
     for i in 0..16 {
-        let r = pixels[i * 4 + 0];
+        let r = pixels[i * 4];
         let g = pixels[i * 4 + 1];
         let b = pixels[i * 4 + 2];
         let a = pixels[i * 4 + 3];
-        assert_eq!((r, g, b, a), (expected_r, expected_g, expected_b, expected_a));
+        assert_eq!(
+            (r, g, b, a),
+            (expected_r, expected_g, expected_b, expected_a)
+        );
     }
 
     println!("\nPixel Verification Sample (First 4 pixels):");
@@ -85,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "  Pixel [{:02}]: R={}, G={}, B={}, A={} (Expected: {}, {}, {}, {})",
             i,
-            pixels[i * 4 + 0],
+            pixels[i * 4],
             pixels[i * 4 + 1],
             pixels[i * 4 + 2],
             pixels[i * 4 + 3],

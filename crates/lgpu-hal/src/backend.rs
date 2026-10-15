@@ -22,8 +22,18 @@ pub trait HalDevice: Send + Sync + 'static {
 
     fn create_buffer(&self, desc: &BufferDesc) -> Result<Self::Buffer, HalError>;
     fn destroy_buffer(&self, buffer: Self::Buffer);
-    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, bytes: &[u8]) -> Result<(), HalError>;
-    fn read_buffer(&self, buffer: &Self::Buffer, offset: u64, dest: &mut [u8]) -> Result<(), HalError>;
+    fn write_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), HalError>;
+    fn read_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        dest: &mut [u8],
+    ) -> Result<(), HalError>;
 
     fn create_texture(&self, desc: &TextureDesc) -> Result<Self::Texture, HalError>;
     fn destroy_texture(&self, texture: Self::Texture);
@@ -95,11 +105,21 @@ impl HalDevice for crate::vulkan::VulkanDevice {
         self.destroy_buffer(buffer)
     }
 
-    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, bytes: &[u8]) -> Result<(), HalError> {
+    fn write_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), HalError> {
         self.write_buffer(buffer, offset, bytes)
     }
 
-    fn read_buffer(&self, buffer: &Self::Buffer, offset: u64, dest: &mut [u8]) -> Result<(), HalError> {
+    fn read_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        dest: &mut [u8],
+    ) -> Result<(), HalError> {
         self.read_buffer(buffer, offset, dest)
     }
 
@@ -194,11 +214,21 @@ impl HalDevice for crate::metal::MetalDevice {
         self.destroy_buffer(buffer)
     }
 
-    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, bytes: &[u8]) -> Result<(), HalError> {
+    fn write_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), HalError> {
         self.write_buffer(buffer, offset, bytes)
     }
 
-    fn read_buffer(&self, buffer: &Self::Buffer, offset: u64, dest: &mut [u8]) -> Result<(), HalError> {
+    fn read_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        dest: &mut [u8],
+    ) -> Result<(), HalError> {
         self.read_buffer(buffer, offset, dest)
     }
 
@@ -293,11 +323,21 @@ impl HalDevice for crate::d3d12::D3D12Device {
         self.destroy_buffer(buffer)
     }
 
-    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, bytes: &[u8]) -> Result<(), HalError> {
+    fn write_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), HalError> {
         self.write_buffer(buffer, offset, bytes)
     }
 
-    fn read_buffer(&self, buffer: &Self::Buffer, offset: u64, dest: &mut [u8]) -> Result<(), HalError> {
+    fn read_buffer(
+        &self,
+        buffer: &Self::Buffer,
+        offset: u64,
+        dest: &mut [u8],
+    ) -> Result<(), HalError> {
         self.read_buffer(buffer, offset, dest)
     }
 

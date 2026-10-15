@@ -1,8 +1,8 @@
 //! Vulkan buffer resource management and operations.
 
-use ash::vk;
-use crate::{BufferDesc, BufferUsage, HalError, MemoryLocation};
 use super::VulkanDevice;
+use crate::{BufferDesc, BufferUsage, HalError, MemoryLocation};
+use ash::vk;
 
 pub struct VulkanBuffer {
     pub(crate) buffer: vk::Buffer,
@@ -68,7 +68,8 @@ impl VulkanDevice {
             MemoryLocation::GpuToCpu => vk::MemoryPropertyFlags::HOST_VISIBLE,
         };
 
-        let (mem_type_index, is_coherent) = self.find_memory_type(mem_reqs.memory_type_bits, mem_props)?;
+        let (mem_type_index, is_coherent) =
+            self.find_memory_type(mem_reqs.memory_type_bits, mem_props)?;
         let is_host_visible = desc.memory_location != MemoryLocation::GpuOnly;
 
         let alloc = self.allocator.lock().unwrap().allocate(
@@ -81,14 +82,22 @@ impl VulkanDevice {
         )?;
 
         unsafe {
-            if let Err(e) = self.device.bind_buffer_memory(buffer, alloc.memory, alloc.offset) {
+            if let Err(e) = self
+                .device
+                .bind_buffer_memory(buffer, alloc.memory, alloc.offset)
+            {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator.lock().unwrap().free(block_id, alloc.offset, mem_reqs.size);
+                    self.allocator
+                        .lock()
+                        .unwrap()
+                        .free(block_id, alloc.offset, mem_reqs.size);
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
                 self.device.destroy_buffer(buffer, None);
-                return Err(HalError::BackendError(format!("vkBindBufferMemory failed: {e}")));
+                return Err(HalError::BackendError(format!(
+                    "vkBindBufferMemory failed: {e}"
+                )));
             }
         }
 
@@ -104,12 +113,20 @@ impl VulkanDevice {
         })
     }
 
-    pub fn write_buffer(&self, buffer: &VulkanBuffer, offset: u64, data: &[u8]) -> Result<(), HalError> {
+    pub fn write_buffer(
+        &self,
+        buffer: &VulkanBuffer,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), HalError> {
         let _guard = buffer.sync_lock.lock().unwrap();
         let ptr = buffer
             .mapped_ptr
             .ok_or_else(|| HalError::MapError("Buffer is not host-mapped".to_string()))?;
-        if offset.checked_add(data.len() as u64).is_none_or(|end| end > buffer.size) {
+        if offset
+            .checked_add(data.len() as u64)
+            .is_none_or(|end| end > buffer.size)
+        {
             return Err(HalError::CommandError("Buffer write overflow".to_string()));
         }
         unsafe {
@@ -130,18 +147,28 @@ impl VulkanDevice {
                     .size(aligned_size);
                 self.device
                     .flush_mapped_memory_ranges(&[range])
-                    .map_err(|e| HalError::MapError(format!("vkFlushMappedMemoryRanges failed: {e}")))?;
+                    .map_err(|e| {
+                        HalError::MapError(format!("vkFlushMappedMemoryRanges failed: {e}"))
+                    })?;
             }
         }
         Ok(())
     }
 
-    pub fn read_buffer(&self, buffer: &VulkanBuffer, offset: u64, data: &mut [u8]) -> Result<(), HalError> {
+    pub fn read_buffer(
+        &self,
+        buffer: &VulkanBuffer,
+        offset: u64,
+        data: &mut [u8],
+    ) -> Result<(), HalError> {
         let _guard = buffer.sync_lock.lock().unwrap();
         let ptr = buffer
             .mapped_ptr
             .ok_or_else(|| HalError::MapError("Buffer is not host-mapped".to_string()))?;
-        if offset.checked_add(data.len() as u64).is_none_or(|end| end > buffer.size) {
+        if offset
+            .checked_add(data.len() as u64)
+            .is_none_or(|end| end > buffer.size)
+        {
             return Err(HalError::CommandError("Buffer read overflow".to_string()));
         }
         unsafe {
@@ -159,7 +186,9 @@ impl VulkanDevice {
                     .size(aligned_size);
                 self.device
                     .invalidate_mapped_memory_ranges(&[range])
-                    .map_err(|e| HalError::MapError(format!("vkInvalidateMappedMemoryRanges failed: {e}")))?;
+                    .map_err(|e| {
+                        HalError::MapError(format!("vkInvalidateMappedMemoryRanges failed: {e}"))
+                    })?;
             }
 
             let src = ptr.add(offset as usize);
@@ -178,7 +207,10 @@ impl VulkanDevice {
             }
             self.device.destroy_buffer(buffer.buffer, None);
             if let Some(block_id) = buffer.block_id {
-                self.allocator.lock().unwrap().free(block_id, buffer.offset, buffer.size);
+                self.allocator
+                    .lock()
+                    .unwrap()
+                    .free(block_id, buffer.offset, buffer.size);
             } else {
                 self.device.free_memory(buffer.memory, None);
             }

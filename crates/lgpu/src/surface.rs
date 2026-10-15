@@ -1,9 +1,7 @@
 //! Native window surface and presentation.
 
+use crate::{Device, Error, HalError, Queue, Texture, TextureFormat, TextureUsage};
 use std::sync::Arc;
-use crate::{
-    Device, Error, HalError, Queue, Texture, TextureFormat, TextureUsage,
-};
 
 pub use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
@@ -59,7 +57,11 @@ pub struct SurfaceTexture {
 }
 
 impl Surface {
-    pub fn configure(&mut self, device: &Device, config: &SurfaceConfiguration) -> Result<(), Error> {
+    pub fn configure(
+        &mut self,
+        device: &Device,
+        config: &SurfaceConfiguration,
+    ) -> Result<(), Error> {
         #[cfg(feature = "vulkan")]
         {
             let vulkan_device = &device.vulkan_device;
@@ -122,18 +124,36 @@ impl Surface {
                 let mut create_sync_objects = || -> Result<(), HalError> {
                     for _ in 0..MAX_FRAMES_IN_FLIGHT {
                         let acq = unsafe {
-                            vulkan_device.device.create_semaphore(&sem_info, None)
-                                .map_err(|e| HalError::BackendError(format!("Failed to create acquire semaphore: {e}")))?
+                            vulkan_device
+                                .device
+                                .create_semaphore(&sem_info, None)
+                                .map_err(|e| {
+                                    HalError::BackendError(format!(
+                                        "Failed to create acquire semaphore: {e}"
+                                    ))
+                                })?
                         };
                         created_acqs.push(acq);
                         let rend = unsafe {
-                            vulkan_device.device.create_semaphore(&sem_info, None)
-                                .map_err(|e| HalError::BackendError(format!("Failed to create render semaphore: {e}")))?
+                            vulkan_device
+                                .device
+                                .create_semaphore(&sem_info, None)
+                                .map_err(|e| {
+                                    HalError::BackendError(format!(
+                                        "Failed to create render semaphore: {e}"
+                                    ))
+                                })?
                         };
                         created_rends.push(rend);
                         let fence = unsafe {
-                            vulkan_device.device.create_fence(&fence_info, None)
-                                .map_err(|e| HalError::BackendError(format!("Failed to create in-flight fence: {e}")))?
+                            vulkan_device
+                                .device
+                                .create_fence(&fence_info, None)
+                                .map_err(|e| {
+                                    HalError::BackendError(format!(
+                                        "Failed to create in-flight fence: {e}"
+                                    ))
+                                })?
                         };
                         created_fences.push(fence);
                     }
@@ -176,15 +196,22 @@ impl Surface {
     pub fn get_current_texture(&mut self) -> Result<SurfaceTexture, Error> {
         #[cfg(feature = "vulkan")]
         {
-            let swapchain = self.swapchain.as_ref().ok_or_else(|| {
-                HalError::BackendError("Surface is not configured".to_string())
-            })?;
+            let swapchain = self
+                .swapchain
+                .as_ref()
+                .ok_or_else(|| HalError::BackendError("Surface is not configured".to_string()))?;
             let device = self.device.as_ref().ok_or_else(|| {
                 HalError::BackendError("Surface has no associated device".to_string())
             })?;
 
-            if self.acquire_semaphores.is_empty() || self.render_semaphores.is_empty() || self.in_flight_fences.is_empty() {
-                return Err(HalError::BackendError("Surface sync primitives not initialized".to_string()).into());
+            if self.acquire_semaphores.is_empty()
+                || self.render_semaphores.is_empty()
+                || self.in_flight_fences.is_empty()
+            {
+                return Err(HalError::BackendError(
+                    "Surface sync primitives not initialized".to_string(),
+                )
+                .into());
             }
 
             let frame_idx = self.current_frame;
@@ -194,13 +221,19 @@ impl Surface {
 
             // Wait for previous frame using this slot to complete on GPU
             unsafe {
-                device.device.wait_for_fences(&[fence], true, u64::MAX)
-                    .map_err(|e| HalError::BackendError(format!("Failed to wait for frame fence: {e}")))?;
-                device.device.reset_fences(&[fence])
-                    .map_err(|e| HalError::BackendError(format!("Failed to reset frame fence: {e}")))?;
+                device
+                    .device
+                    .wait_for_fences(&[fence], true, u64::MAX)
+                    .map_err(|e| {
+                        HalError::BackendError(format!("Failed to wait for frame fence: {e}"))
+                    })?;
+                device.device.reset_fences(&[fence]).map_err(|e| {
+                    HalError::BackendError(format!("Failed to reset frame fence: {e}"))
+                })?;
             }
 
-            let (image_index, suboptimal) = device.acquire_next_image(swapchain, acq_sem, u64::MAX)?;
+            let (image_index, suboptimal) =
+                device.acquire_next_image(swapchain, acq_sem, u64::MAX)?;
 
             let image = swapchain.images[image_index as usize];
             let view = swapchain.views[image_index as usize];
@@ -260,13 +293,19 @@ impl Drop for Surface {
             if let Some(device) = &self.device {
                 let _ = device.wait_idle();
                 for acq in self.acquire_semaphores.drain(..) {
-                    unsafe { device.device.destroy_semaphore(acq, None); }
+                    unsafe {
+                        device.device.destroy_semaphore(acq, None);
+                    }
                 }
                 for rend in self.render_semaphores.drain(..) {
-                    unsafe { device.device.destroy_semaphore(rend, None); }
+                    unsafe {
+                        device.device.destroy_semaphore(rend, None);
+                    }
                 }
                 for fence in self.in_flight_fences.drain(..) {
-                    unsafe { device.device.destroy_fence(fence, None); }
+                    unsafe {
+                        device.device.destroy_fence(fence, None);
+                    }
                 }
                 if let Some(swapchain) = self.swapchain.take() {
                     device.destroy_swapchain(swapchain);

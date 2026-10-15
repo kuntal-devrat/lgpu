@@ -1,9 +1,7 @@
 //! Command encoders, buffers, and recording passes.
 
+use crate::{BindlessComputePipeline, Buffer, ComputePipeline, Error, GraphicsPipeline, Texture};
 use std::sync::Arc;
-use crate::{
-    BindlessComputePipeline, Buffer, ComputePipeline, Error, GraphicsPipeline, Texture,
-};
 
 pub struct CommandEncoder {
     #[cfg(feature = "vulkan")]
@@ -38,8 +36,7 @@ impl CommandEncoder {
                 .bind_buffers_to_compute_pipeline(raw_pipeline, &raw_buffers);
 
             let recorder = self.recorder.as_ref().unwrap();
-            self.vulkan_device
-                .dispatch(recorder, raw_pipeline, x, y, z);
+            self.vulkan_device.dispatch(recorder, raw_pipeline, x, y, z);
         }
     }
 
@@ -89,7 +86,8 @@ impl CommandEncoder {
         {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.cmd_clear_and_render(recorder, raw_tex, clear_color)?;
+            self.vulkan_device
+                .cmd_clear_and_render(recorder, raw_tex, clear_color)?;
             Ok(())
         }
         #[cfg(not(feature = "vulkan"))]
@@ -164,7 +162,13 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (texture, pipeline, vertex_count, push_constants, color_load_op);
+            let _ = (
+                texture,
+                pipeline,
+                vertex_count,
+                push_constants,
+                color_load_op,
+            );
             Ok(())
         }
     }
@@ -229,7 +233,15 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (color_texture, depth_texture, pipeline, vertex_count, push_constants, clear_color, clear_depth);
+            let _ = (
+                color_texture,
+                depth_texture,
+                pipeline,
+                vertex_count,
+                push_constants,
+                clear_color,
+                clear_depth,
+            );
             Ok(())
         }
     }
@@ -270,7 +282,15 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (color_texture, depth_texture, pipeline, vertex_count, push_constants, color_load_op, depth_load_op);
+            let _ = (
+                color_texture,
+                depth_texture,
+                pipeline,
+                vertex_count,
+                push_constants,
+                color_load_op,
+                depth_load_op,
+            );
             Ok(())
         }
     }
@@ -308,17 +328,14 @@ impl CommandEncoder {
         }
     }
 
-    pub fn copy_buffer_to_texture(
-        &mut self,
-        buffer: &Buffer,
-        texture: &Texture,
-    ) {
+    pub fn copy_buffer_to_texture(&mut self, buffer: &Buffer, texture: &Texture) {
         #[cfg(feature = "vulkan")]
         {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_buf = buffer.hal_buffer.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.cmd_copy_buffer_to_image(recorder, raw_buf, raw_tex);
+            self.vulkan_device
+                .cmd_copy_buffer_to_image(recorder, raw_buf, raw_tex);
         }
     }
 
@@ -391,7 +408,18 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (texture, pipeline, index_buffer, index_count, instance_count, first_index, vertex_offset, first_instance, push_constants, clear_color);
+            let _ = (
+                texture,
+                pipeline,
+                index_buffer,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+                push_constants,
+                clear_color,
+            );
             Ok(())
         }
     }
@@ -440,7 +468,20 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (color_texture, depth_texture, pipeline, index_buffer, index_count, instance_count, first_index, vertex_offset, first_instance, push_constants, clear_color, clear_depth);
+            let _ = (
+                color_texture,
+                depth_texture,
+                pipeline,
+                index_buffer,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+                push_constants,
+                clear_color,
+                clear_depth,
+            );
             Ok(())
         }
     }
@@ -493,7 +534,20 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (color_texture, depth_texture, pipeline, index_buffer, index_count, instance_count, first_index, vertex_offset, first_instance, push_constants, color_load_op, depth_load_op);
+            let _ = (
+                color_texture,
+                depth_texture,
+                pipeline,
+                index_buffer,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+                push_constants,
+                color_load_op,
+                depth_load_op,
+            );
             Ok(())
         }
     }
@@ -532,7 +586,16 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (texture, pipeline, indirect_buffer, offset, draw_count, stride, push_constants, clear_color);
+            let _ = (
+                texture,
+                pipeline,
+                indirect_buffer,
+                offset,
+                draw_count,
+                stride,
+                push_constants,
+                clear_color,
+            );
             Ok(())
         }
     }
@@ -576,22 +639,30 @@ impl CommandEncoder {
         }
         #[cfg(not(feature = "vulkan"))]
         {
-            let _ = (color_texture, depth_texture, pipeline, indirect_buffer, offset, draw_count, stride, push_constants, clear_color, clear_depth);
+            let _ = (
+                color_texture,
+                depth_texture,
+                pipeline,
+                indirect_buffer,
+                offset,
+                draw_count,
+                stride,
+                push_constants,
+                clear_color,
+                clear_depth,
+            );
             Ok(())
         }
     }
 
-    pub fn copy_texture_to_buffer(
-        &mut self,
-        texture: &Texture,
-        buffer: &Buffer,
-    ) {
+    pub fn copy_texture_to_buffer(&mut self, texture: &Texture, buffer: &Buffer) {
         #[cfg(feature = "vulkan")]
         {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
             let raw_buf = buffer.hal_buffer.as_ref().unwrap();
-            self.vulkan_device.cmd_copy_image_to_buffer(recorder, raw_tex, raw_buf);
+            self.vulkan_device
+                .cmd_copy_image_to_buffer(recorder, raw_tex, raw_buf);
         }
     }
 
@@ -617,7 +688,8 @@ impl CommandEncoder {
         {
             let recorder = self.recorder.as_ref().unwrap();
             let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.cmd_transition_to_present(recorder, raw_tex);
+            self.vulkan_device
+                .cmd_transition_to_present(recorder, raw_tex);
         }
         #[cfg(not(feature = "vulkan"))]
         {

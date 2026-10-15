@@ -1,8 +1,8 @@
 //! Vulkan logical device and execution context.
 
-use ash::vk;
-use crate::HalError;
 use super::{allocator, bindless, VulkanCommandRecorder};
+use crate::HalError;
+use ash::vk;
 
 pub struct VulkanDevice {
     pub device: ash::Device,
@@ -33,7 +33,8 @@ impl VulkanDevice {
             let preferred = required | vk::MemoryPropertyFlags::HOST_COHERENT;
             for i in 0..self.memory_properties.memory_type_count {
                 if (type_filter & (1 << i)) != 0
-                    && (self.memory_properties.memory_types[i as usize].property_flags & preferred) == preferred
+                    && (self.memory_properties.memory_types[i as usize].property_flags & preferred)
+                        == preferred
                 {
                     return Ok((i, true));
                 }
@@ -42,14 +43,18 @@ impl VulkanDevice {
 
         for i in 0..self.memory_properties.memory_type_count {
             if (type_filter & (1 << i)) != 0
-                && (self.memory_properties.memory_types[i as usize].property_flags & required) == required
+                && (self.memory_properties.memory_types[i as usize].property_flags & required)
+                    == required
             {
                 let is_coherent = (self.memory_properties.memory_types[i as usize].property_flags
-                    & vk::MemoryPropertyFlags::HOST_COHERENT) == vk::MemoryPropertyFlags::HOST_COHERENT;
+                    & vk::MemoryPropertyFlags::HOST_COHERENT)
+                    == vk::MemoryPropertyFlags::HOST_COHERENT;
                 return Ok((i, is_coherent));
             }
         }
-        Err(HalError::OutOfMemory("Suitable memory type not found".to_string()))
+        Err(HalError::OutOfMemory(
+            "Suitable memory type not found".to_string(),
+        ))
     }
 
     pub fn wait_idle(&self) -> Result<(), HalError> {
@@ -68,7 +73,8 @@ impl Drop for VulkanDevice {
             if let Some(heap) = self.bindless_heap.take() {
                 heap.destroy(&self.device);
             }
-            self.device.destroy_semaphore(self.internal_frame_semaphore, None);
+            self.device
+                .destroy_semaphore(self.internal_frame_semaphore, None);
             for (pool, _) in self.command_recorder_cache.lock().unwrap().drain(..) {
                 self.device.destroy_command_pool(pool, None);
             }
@@ -81,7 +87,8 @@ impl Drop for VulkanDevice {
                 self.device.destroy_fence(fence, None);
             }
             self.allocator.lock().unwrap().destroy(&self.device);
-            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device
+                .destroy_pipeline_cache(self.pipeline_cache, None);
             self.device.destroy_device(None);
         }
     }

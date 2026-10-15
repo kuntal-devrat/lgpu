@@ -1,8 +1,10 @@
 //! Vulkan texture and sampler resource management.
 
-use ash::vk;
-use crate::{AddressMode, FilterMode, HalError, SamplerDesc, TextureDesc, TextureFormat, TextureUsage};
 use super::VulkanDevice;
+use crate::{
+    AddressMode, FilterMode, HalError, SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
+};
+use ash::vk;
 
 pub struct VulkanTexture {
     pub image: vk::Image,
@@ -125,14 +127,22 @@ impl VulkanDevice {
         )?;
 
         unsafe {
-            if let Err(e) = self.device.bind_image_memory(image, alloc.memory, alloc.offset) {
+            if let Err(e) = self
+                .device
+                .bind_image_memory(image, alloc.memory, alloc.offset)
+            {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator.lock().unwrap().free(block_id, alloc.offset, mem_reqs.size);
+                    self.allocator
+                        .lock()
+                        .unwrap()
+                        .free(block_id, alloc.offset, mem_reqs.size);
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
                 self.device.destroy_image(image, None);
-                return Err(HalError::BackendError(format!("vkBindImageMemory failed: {e}")));
+                return Err(HalError::BackendError(format!(
+                    "vkBindImageMemory failed: {e}"
+                )));
             }
         }
 
@@ -191,7 +201,11 @@ impl VulkanDevice {
             }
             if texture.memory != vk::DeviceMemory::null() {
                 if let Some(block_id) = texture.block_id {
-                    self.allocator.lock().unwrap().free(block_id, texture.offset, texture.allocated_size);
+                    self.allocator.lock().unwrap().free(
+                        block_id,
+                        texture.offset,
+                        texture.allocated_size,
+                    );
                 } else {
                     self.device.free_memory(texture.memory, None);
                 }
@@ -204,7 +218,12 @@ impl VulkanDevice {
             HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
         })?;
         let slot = heap.allocate_texture_slot()?;
-        heap.write_texture_descriptor(&self.device, slot, texture.view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        heap.write_texture_descriptor(
+            &self.device,
+            slot,
+            texture.view,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
         Ok(slot)
     }
 

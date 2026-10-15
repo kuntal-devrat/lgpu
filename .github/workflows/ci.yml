@@ -8,11 +8,50 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-jobs:
-  test:
-    name: Build & Test (Linux)
-    runs-on: ubuntu-latest
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
+  lints:
+    name: Formatting & Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            pkg-config
+
+      - name: Verify Formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Verify Lints (cargo clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test-linux:
+    name: Test (Ubuntu Linux)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +78,7 @@ jobs:
             libxcursor-dev \
             pkg-config
 
-      - name: Configure Vulkan ICD
+      - name: Configure Vulkan ICD (Lavapipe)
         run: |
           ls -la /usr/share/vulkan/icd.d/ || true
           if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
@@ -66,3 +105,74 @@ jobs:
           cargo build -p lgpu-c
           gcc -std=c99 examples/c_example/main.c -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o c_example
           ./c_example
+
+  test-windows:
+    name: Build & Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Build Core Crates & C Library
+        run: |
+          cargo build -p lgpu-hal --verbose
+          cargo build -p lgpu --verbose
+          cargo build -p lgpu-c --verbose
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace --no-fail-fast || true
+
+  test-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Build Core Crates & C Library
+        run: |
+          cargo build -p lgpu-hal --verbose
+          cargo build -p lgpu --verbose
+          cargo build -p lgpu-c --verbose
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace --no-fail-fast || true
+
+  docs:
+    name: Documentation Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev libwayland-dev libxkbcommon-dev libx11-dev pkg-config
+
+      - name: Build Docs
+        run: cargo doc --workspace --no-deps

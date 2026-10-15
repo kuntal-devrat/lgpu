@@ -3,6 +3,8 @@
 //! An ultra-lightweight, bindless-first cross-platform GPU abstraction for Rust and C.
 //! Designed for sub-second compile times, minimal binary footprint, and maximum performance.
 
+#![allow(clippy::too_many_arguments)]
+
 pub mod buffer;
 pub mod command;
 pub mod device;
@@ -23,9 +25,9 @@ pub use texture::*;
 
 pub use lgpu_hal::{
     AdapterInfo, AddressMode, Backend, BlendComponent, BlendFactor, BlendOp, BlendState,
-    BufferDesc, BufferUsage, ColorLoadOp, CullMode, DepthLoadOp, DeviceType, FilterMode,
-    FrontFace, GraphicsPipelineDesc, HalError, LoadOp, MemoryLocation, PrimitiveState,
-    PrimitiveTopology, SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, ColorLoadOp, CullMode, DepthLoadOp, DeviceType, FilterMode, FrontFace,
+    GraphicsPipelineDesc, HalError, LoadOp, MemoryLocation, PrimitiveState, PrimitiveTopology,
+    SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
 };
 
 #[derive(thiserror::Error, Debug)]

@@ -5,19 +5,22 @@
 //! - Multi-threaded command recording and atomic batch submissions
 //! - GPU execution, memory, and buffer pipeline barriers
 
+use lgpu::{
+    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
+};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation,
-    TextureDesc, TextureFormat, TextureUsage,
-};
 
 #[test]
 fn test_timeline_semaphore_cpu_signaling_and_waiting() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    let (device, _queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let semaphore = Arc::new(
         device
@@ -29,15 +32,22 @@ fn test_timeline_semaphore_cpu_signaling_and_waiting() {
     assert_eq!(initial_val, 0, "Initial timeline semaphore value must be 0");
 
     // Signal from host
-    semaphore.signal(5).expect("Failed to signal timeline semaphore");
+    semaphore
+        .signal(5)
+        .expect("Failed to signal timeline semaphore");
     let val_after_signal = semaphore.value().expect("Failed to get semaphore value");
-    assert_eq!(val_after_signal, 5, "Timeline semaphore value must be 5 after signaling");
+    assert_eq!(
+        val_after_signal, 5,
+        "Timeline semaphore value must be 5 after signaling"
+    );
 
     // Test cross-thread signaling and waiting
     let sem_clone = Arc::clone(&semaphore);
     let handle = thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
-        sem_clone.signal(10).expect("Thread failed to signal semaphore");
+        sem_clone
+            .signal(10)
+            .expect("Thread failed to signal semaphore");
     });
 
     // Wait on main thread with a 5 second timeout
@@ -54,8 +64,12 @@ fn test_timeline_semaphore_cpu_signaling_and_waiting() {
 #[test]
 fn test_timeline_semaphore_gpu_async_pipelining() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let timeline = device
         .create_timeline_semaphore(0)
@@ -71,11 +85,17 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC,
     };
-    let texture = device.create_texture(&tex_desc).expect("Failed to create texture");
+    let texture = device
+        .create_texture(&tex_desc)
+        .expect("Failed to create texture");
 
     // Step 1: Submit async command buffer that signals timeline value 1 on GPU completion
-    let mut encoder1 = device.create_command_encoder().expect("Failed to create encoder");
-    encoder1.clear_and_render_texture(&texture, [0.1, 0.2, 0.3, 1.0]).expect("clear failed");
+    let mut encoder1 = device
+        .create_command_encoder()
+        .expect("Failed to create encoder");
+    encoder1
+        .clear_and_render_texture(&texture, [0.1, 0.2, 0.3, 1.0])
+        .expect("clear failed");
     encoder1.memory_barrier();
     let cmd1 = encoder1.finish();
 
@@ -88,11 +108,18 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
         .wait(1, 5_000_000_000)
         .expect("Timeout waiting for GPU timeline semaphore at value 1");
     let val1 = timeline.value().expect("Failed to read timeline value");
-    assert!(val1 >= 1, "Timeline value must be >= 1 after GPU completion");
+    assert!(
+        val1 >= 1,
+        "Timeline value must be >= 1 after GPU completion"
+    );
 
     // Step 2: Submit second async command buffer that waits for timeline value 1 and signals value 2
-    let mut encoder2 = device.create_command_encoder().expect("Failed to create encoder");
-    encoder2.clear_and_render_texture(&texture, [0.4, 0.5, 0.6, 1.0]).expect("clear failed");
+    let mut encoder2 = device
+        .create_command_encoder()
+        .expect("Failed to create encoder");
+    encoder2
+        .clear_and_render_texture(&texture, [0.4, 0.5, 0.6, 1.0])
+        .expect("clear failed");
     let cmd2 = encoder2.finish();
 
     queue
@@ -104,7 +131,10 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
         .wait(2, 5_000_000_000)
         .expect("Timeout waiting for GPU timeline semaphore at value 2");
     let val2 = timeline.value().expect("Failed to read timeline value");
-    assert!(val2 >= 2, "Timeline value must be >= 2 after GPU completion");
+    assert!(
+        val2 >= 2,
+        "Timeline value must be >= 2 after GPU completion"
+    );
 
     println!("SUCCESS: GPU async pipelining with timeline semaphores verified.");
 }
@@ -112,8 +142,12 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
 #[test]
 fn test_multithreaded_batch_submission() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let device_arc = Arc::new(device);
     let mut thread_handles = Vec::new();
@@ -122,7 +156,9 @@ fn test_multithreaded_batch_submission() {
     for thread_idx in 0..4 {
         let dev = Arc::clone(&device_arc);
         let handle = thread::spawn(move || {
-            let mut encoder = dev.create_command_encoder().expect("Failed to create encoder");
+            let mut encoder = dev
+                .create_command_encoder()
+                .expect("Failed to create encoder");
             // Add a memory barrier in each recorded buffer
             encoder.memory_barrier();
             // Create a small texture and clear it
@@ -136,9 +172,13 @@ fn test_multithreaded_batch_submission() {
                 format: TextureFormat::Rgba8Unorm,
                 usage: TextureUsage::RENDER_ATTACHMENT,
             };
-            let tex = dev.create_texture(&tex_desc).expect("Failed to create texture");
+            let tex = dev
+                .create_texture(&tex_desc)
+                .expect("Failed to create texture");
             let c = (thread_idx as f32 + 1.0) * 0.2;
-            encoder.clear_and_render_texture(&tex, [c, c, c, 1.0]).expect("clear failed");
+            encoder
+                .clear_and_render_texture(&tex, [c, c, c, 1.0])
+                .expect("clear failed");
             (encoder.finish(), tex)
         });
         thread_handles.push(handle);
@@ -165,12 +205,15 @@ fn test_multithreaded_batch_submission() {
     println!("SUCCESS: Multi-threaded recording and atomic batch submission verified.");
 }
 
-
 #[test]
 fn test_gpu_barriers_and_buffer_synchronization() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let buf_desc = BufferDesc {
         label: Some("BarrierTestBuffer"),
@@ -178,16 +221,22 @@ fn test_gpu_barriers_and_buffer_synchronization() {
         usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
         memory_location: MemoryLocation::CpuToGpu,
     };
-    let buffer = device.create_buffer(&buf_desc).expect("Failed to create buffer");
+    let buffer = device
+        .create_buffer(&buf_desc)
+        .expect("Failed to create buffer");
 
-    let mut encoder = device.create_command_encoder().expect("Failed to create encoder");
+    let mut encoder = device
+        .create_command_encoder()
+        .expect("Failed to create encoder");
     // Test general GPU memory barrier
     encoder.memory_barrier();
     // Test buffer-specific barrier
     encoder.buffer_barrier(&buffer);
     let cmd = encoder.finish();
 
-    queue.submit(cmd).expect("Failed to submit barrier command buffer");
+    queue
+        .submit(cmd)
+        .expect("Failed to submit barrier command buffer");
 
     println!("SUCCESS: GPU memory barrier and buffer-specific barrier verified.");
 }
@@ -195,8 +244,12 @@ fn test_gpu_barriers_and_buffer_synchronization() {
 #[test]
 fn test_async_recorder_harvesting_leak_free() {
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0].request_device(&instance).expect("Failed to request device");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
 
     let timeline = device
         .create_timeline_semaphore(0)
@@ -206,7 +259,9 @@ fn test_async_recorder_harvesting_leak_free() {
     // Verifies that the internal timeline frame semaphore and pending_async_recorders
     // harvest finished command pools smoothly without resource exhaustion or leaks.
     for frame in 1..=50u64 {
-        let mut encoder = device.create_command_encoder().expect("Failed to create encoder");
+        let mut encoder = device
+            .create_command_encoder()
+            .expect("Failed to create encoder");
         encoder.memory_barrier();
         let cmd = encoder.finish();
 

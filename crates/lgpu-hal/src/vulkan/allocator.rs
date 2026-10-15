@@ -4,8 +4,8 @@
 //! blocks (32 MiB by default), avoiding driver allocation limits (e.g., 4096 allocations)
 //! and eliminating redundant vkAllocateMemory, vkMapMemory, and vkUnmapMemory calls.
 
-use ash::vk;
 use crate::HalError;
+use ash::vk;
 
 pub const DEFAULT_BLOCK_SIZE: u64 = 32 * 1024 * 1024; // 32 MiB
 pub const SUBALLOCATION_THRESHOLD: u64 = 16 * 1024 * 1024; // 16 MiB
@@ -105,9 +105,9 @@ impl VulkanSuballocator {
                 .memory_type_index(memory_type_index);
 
             let memory = unsafe {
-                device
-                    .allocate_memory(&alloc_info, None)
-                    .map_err(|e| HalError::OutOfMemory(format!("vkAllocateMemory dedicated failed: {e}")))?
+                device.allocate_memory(&alloc_info, None).map_err(|e| {
+                    HalError::OutOfMemory(format!("vkAllocateMemory dedicated failed: {e}"))
+                })?
             };
 
             let mapped_ptr = if is_host_visible {
@@ -132,9 +132,13 @@ impl VulkanSuballocator {
 
         // Search existing blocks for matching memory type, host-visibility, and sufficient space
         for block in &mut self.blocks {
-            if block.memory_type_index == memory_type_index && block.is_host_visible == is_host_visible {
+            if block.memory_type_index == memory_type_index
+                && block.is_host_visible == is_host_visible
+            {
                 if let Some(offset) = block.allocate(size, alignment) {
-                    let mapped_ptr = block.mapped_base.map(|base| unsafe { base.add(offset as usize) });
+                    let mapped_ptr = block
+                        .mapped_base
+                        .map(|base| unsafe { base.add(offset as usize) });
                     return Ok(AllocationResult {
                         memory: block.memory,
                         offset,
@@ -187,7 +191,9 @@ impl VulkanSuballocator {
             .allocate(size, alignment)
             .expect("Fresh block must have sufficient space for allocation");
 
-        let mapped_ptr = block.mapped_base.map(|base| unsafe { base.add(offset as usize) });
+        let mapped_ptr = block
+            .mapped_base
+            .map(|base| unsafe { base.add(offset as usize) });
 
         self.blocks.push(block);
 

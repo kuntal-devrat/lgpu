@@ -1,11 +1,11 @@
 //! Integration tests verifying error paths, bounds checks, swapchain resizing, frames in flight, and multi-threading.
 
+use lgpu::{
+    BufferDesc, BufferUsage, Error, HalError, Instance, MemoryLocation, PresentMode,
+    SurfaceConfiguration, TextureDesc, TextureFormat, TextureUsage,
+};
 use std::sync::Arc;
 use std::thread;
-use lgpu::{
-    BufferDesc, BufferUsage, Error, HalError, Instance, MemoryLocation,
-    PresentMode, SurfaceConfiguration, TextureDesc, TextureFormat, TextureUsage,
-};
 
 #[test]
 fn test_resource_creation_error_paths() {
@@ -14,7 +14,9 @@ fn test_resource_creation_error_paths() {
     if adapters.is_empty() {
         return;
     }
-    let (device, _queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, _queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     // 1. Buffer creation with size: 0 must return InvalidParameter
     let zero_buffer_desc = BufferDesc {
@@ -79,7 +81,9 @@ fn test_buffer_overflow_checks() {
     if adapters.is_empty() {
         return;
     }
-    let (device, queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     let desc = BufferDesc {
         label: Some("OverflowTestBuffer"),
@@ -136,7 +140,9 @@ fn test_swapchain_resize_and_reconfiguration() {
     if adapters.is_empty() {
         return;
     }
-    let (device, queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     // Try creating headless surface
     let surface_res = instance.create_headless_surface();
@@ -150,7 +156,10 @@ fn test_swapchain_resize_and_reconfiguration() {
 
     // 1. Calling get_current_texture on unconfigured surface must return Error
     let err_tex = surface.get_current_texture();
-    assert!(err_tex.is_err(), "Calling get_current_texture before configure must return error");
+    assert!(
+        err_tex.is_err(),
+        "Calling get_current_texture before configure must return error"
+    );
 
     // 2. Initial configuration: 640x480
     let config_initial = SurfaceConfiguration {
@@ -160,17 +169,30 @@ fn test_swapchain_resize_and_reconfiguration() {
         height: 480,
         present_mode: PresentMode::Fifo,
     };
-    surface.configure(&device, &config_initial).expect("Initial surface configure");
+    surface
+        .configure(&device, &config_initial)
+        .expect("Initial surface configure");
 
-    let surface_tex = surface.get_current_texture().expect("get_current_texture at 640x480");
+    let surface_tex = surface
+        .get_current_texture()
+        .expect("get_current_texture at 640x480");
     assert_eq!(surface_tex.texture.width, 640);
     assert_eq!(surface_tex.texture.height, 480);
-    assert!(!surface_tex.texture.is_owned(), "Swapchain textures must not be owned");
+    assert!(
+        !surface_tex.texture.is_owned(),
+        "Swapchain textures must not be owned"
+    );
 
-    let mut encoder = device.create_command_encoder().expect("create_command_encoder");
-    encoder.clear_and_render_texture(&surface_tex.texture, [0.1, 0.2, 0.3, 1.0]).expect("clear");
+    let mut encoder = device
+        .create_command_encoder()
+        .expect("create_command_encoder");
+    encoder
+        .clear_and_render_texture(&surface_tex.texture, [0.1, 0.2, 0.3, 1.0])
+        .expect("clear");
     let cmd = encoder.finish();
-    queue.submit_surface(cmd, surface_tex).expect("submit_surface");
+    queue
+        .submit_surface(cmd, surface_tex)
+        .expect("submit_surface");
 
     // 3. Swapchain Resize & Reconfiguration: 800x600
     let config_resized = SurfaceConfiguration {
@@ -180,17 +202,27 @@ fn test_swapchain_resize_and_reconfiguration() {
         height: 600,
         present_mode: PresentMode::Fifo,
     };
-    surface.configure(&device, &config_resized).expect("Resize surface configure");
+    surface
+        .configure(&device, &config_resized)
+        .expect("Resize surface configure");
 
-    let resized_tex = surface.get_current_texture().expect("get_current_texture at 800x600");
+    let resized_tex = surface
+        .get_current_texture()
+        .expect("get_current_texture at 800x600");
     assert_eq!(resized_tex.texture.width, 800);
     assert_eq!(resized_tex.texture.height, 600);
     assert!(!resized_tex.texture.is_owned());
 
-    let mut encoder2 = device.create_command_encoder().expect("create_command_encoder");
-    encoder2.clear_and_render_texture(&resized_tex.texture, [0.4, 0.5, 0.6, 1.0]).expect("clear");
+    let mut encoder2 = device
+        .create_command_encoder()
+        .expect("create_command_encoder");
+    encoder2
+        .clear_and_render_texture(&resized_tex.texture, [0.4, 0.5, 0.6, 1.0])
+        .expect("clear");
     let cmd2 = encoder2.finish();
-    queue.submit_surface(cmd2, resized_tex).expect("submit_surface resized");
+    queue
+        .submit_surface(cmd2, resized_tex)
+        .expect("submit_surface resized");
 
     device.wait_idle().expect("wait_idle");
 }
@@ -202,7 +234,9 @@ fn test_multiple_frames_in_flight() {
     if adapters.is_empty() {
         return;
     }
-    let (device, queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     let surface_res = instance.create_headless_surface();
     if let Ok(mut surface) = surface_res {
@@ -213,23 +247,33 @@ fn test_multiple_frames_in_flight() {
             height: 256,
             present_mode: PresentMode::Fifo,
         };
-        surface.configure(&device, &config).expect("surface.configure");
+        surface
+            .configure(&device, &config)
+            .expect("surface.configure");
 
         // Render 6 consecutive frames (cycling through the MAX_FRAMES_IN_FLIGHT = 2 double buffer slots 3 times)
         for i in 0..6 {
             let surface_tex = surface.get_current_texture().expect("get_current_texture");
-            let mut encoder = device.create_command_encoder().expect("create_command_encoder");
+            let mut encoder = device
+                .create_command_encoder()
+                .expect("create_command_encoder");
             let color = (i as f32 + 1.0) / 7.0;
-            encoder.clear_and_render_texture(&surface_tex.texture, [color, color, color, 1.0]).expect("clear");
+            encoder
+                .clear_and_render_texture(&surface_tex.texture, [color, color, color, 1.0])
+                .expect("clear");
             let cmd = encoder.finish();
-            queue.submit_surface(cmd, surface_tex).expect("submit_surface");
+            queue
+                .submit_surface(cmd, surface_tex)
+                .expect("submit_surface");
         }
 
         device.wait_idle().expect("wait_idle");
     }
 
     // Also test multiple frames in flight using timeline semaphores pipelining
-    let timeline = device.create_timeline_semaphore(0).expect("timeline semaphore");
+    let timeline = device
+        .create_timeline_semaphore(0)
+        .expect("timeline semaphore");
     for frame in 1..=4 {
         let mut encoder = device.create_command_encoder().expect("encoder");
         encoder.memory_barrier();
@@ -242,7 +286,9 @@ fn test_multiple_frames_in_flight() {
             .expect("submit_async frame in flight");
     }
 
-    timeline.wait(4, 5_000_000_000).expect("wait for all 4 pipelined frames");
+    timeline
+        .wait(4, 5_000_000_000)
+        .expect("wait for all 4 pipelined frames");
     assert_eq!(timeline.value().expect("read timeline"), 4);
 }
 
@@ -253,7 +299,9 @@ fn test_bindless_descriptor_update_after_bind() {
     if adapters.is_empty() {
         return;
     }
-    let (device, queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     let tex_desc = TextureDesc::new_2d(
         64,
@@ -287,7 +335,9 @@ fn test_bindless_descriptor_update_after_bind() {
     // 4. Finish recording and submit
     encoder.memory_barrier();
     let cmd = encoder.finish();
-    queue.submit(cmd).expect("submit command recorded with concurrent descriptor updates");
+    queue
+        .submit(cmd)
+        .expect("submit command recorded with concurrent descriptor updates");
 
     device.wait_idle().expect("wait_idle");
 }
@@ -299,7 +349,9 @@ fn test_concurrent_multithreaded_safety() {
     if adapters.is_empty() {
         return;
     }
-    let (device, queue) = adapters[0].request_device(&instance).expect("request_device");
+    let (device, queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
 
     let device_arc = Arc::new(device);
     let queue_arc = Arc::new(queue);
@@ -327,7 +379,9 @@ fn test_concurrent_multithreaded_safety() {
             assert_eq!(read_data, data);
 
             // Record a command encoder and submit
-            let mut enc = dev.create_command_encoder().expect("thread create_command_encoder");
+            let mut enc = dev
+                .create_command_encoder()
+                .expect("thread create_command_encoder");
             enc.memory_barrier();
             let cmd = enc.finish();
             q.submit(cmd).expect("thread q.submit");

@@ -1,7 +1,7 @@
 //! GPU texture, image views, and samplers.
 
-use std::sync::Arc;
 use crate::TextureFormat;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(pub u32);
@@ -43,9 +43,7 @@ pub struct Sampler {
 
 impl std::fmt::Debug for Sampler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sampler")
-            .field("id", &self.id)
-            .finish()
+        f.debug_struct("Sampler").field("id", &self.id).finish()
     }
 }
 
@@ -62,21 +60,24 @@ impl Texture {
         #[cfg(feature = "vulkan")]
         {
             Self {
-                hal_texture: self.hal_texture.as_ref().map(|t| lgpu_hal::vulkan::VulkanTexture {
-                    image: t.image,
-                    view: t.view,
-                    memory: t.memory,
-                    block_id: t.block_id,
-                    offset: t.offset,
-                    allocated_size: t.allocated_size,
-                    layout: std::sync::Mutex::new(t.current_layout()),
-                    width: t.width,
-                    height: t.height,
-                    mip_levels: t.mip_levels,
-                    sample_count: t.sample_count,
-                    format: t.format,
-                    owned: false,
-                }),
+                hal_texture: self
+                    .hal_texture
+                    .as_ref()
+                    .map(|t| lgpu_hal::vulkan::VulkanTexture {
+                        image: t.image,
+                        view: t.view,
+                        memory: t.memory,
+                        block_id: t.block_id,
+                        offset: t.offset,
+                        allocated_size: t.allocated_size,
+                        layout: std::sync::Mutex::new(t.current_layout()),
+                        width: t.width,
+                        height: t.height,
+                        mip_levels: t.mip_levels,
+                        sample_count: t.sample_count,
+                        format: t.format,
+                        owned: false,
+                    }),
                 vulkan_device: Arc::clone(&self.vulkan_device),
                 width: self.width,
                 height: self.height,

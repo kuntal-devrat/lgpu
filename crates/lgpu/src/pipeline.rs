@@ -1,10 +1,10 @@
 //! GPU shaders, compute pipelines, and graphics pipelines.
 
-use std::sync::Arc;
 pub use lgpu_hal::{
     BlendComponent, BlendFactor, BlendOp, BlendState, CullMode, FrontFace, GraphicsPipelineDesc,
     PrimitiveState, PrimitiveTopology,
 };
+use std::sync::Arc;
 
 pub struct Shader {
     #[cfg(feature = "vulkan")]

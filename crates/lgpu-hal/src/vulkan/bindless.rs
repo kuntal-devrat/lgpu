@@ -3,9 +3,9 @@
 //! Provides a persistent, global descriptor array where buffers, textures,
 //! and samplers can be indexed directly by a 32-bit integer in shaders.
 
+use crate::HalError;
 use ash::vk;
 use std::sync::Mutex;
-use crate::HalError;
 
 pub const DEFAULT_MAX_STORAGE_BUFFERS: u32 = 16384;
 pub const DEFAULT_MAX_TEXTURES: u32 = 16384;
@@ -60,13 +60,16 @@ impl VulkanBindlessHeap {
         ];
 
         let binding_flags = [
-            vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-            vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-            vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
         ];
 
-        let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-            .binding_flags(&binding_flags);
+        let mut flags_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
             .bindings(&bindings)
@@ -76,7 +79,9 @@ impl VulkanBindlessHeap {
         let descriptor_set_layout = unsafe {
             device
                 .create_descriptor_set_layout(&layout_info, None)
-                .map_err(|e| HalError::PipelineError(format!("Failed to create bindless set layout: {e}")))?
+                .map_err(|e| {
+                    HalError::PipelineError(format!("Failed to create bindless set layout: {e}"))
+                })?
         };
 
         // 2. Global Pipeline Layout (with 128 bytes Push Constants)
@@ -93,7 +98,11 @@ impl VulkanBindlessHeap {
         let pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(&pipeline_layout_info, None)
-                .map_err(|e| HalError::PipelineError(format!("Failed to create bindless pipeline layout: {e}")))?
+                .map_err(|e| {
+                    HalError::PipelineError(format!(
+                        "Failed to create bindless pipeline layout: {e}"
+                    ))
+                })?
         };
 
         // 3. Descriptor Pool
@@ -117,7 +126,11 @@ impl VulkanBindlessHeap {
         let descriptor_pool = unsafe {
             device
                 .create_descriptor_pool(&pool_info, None)
-                .map_err(|e| HalError::PipelineError(format!("Failed to create bindless descriptor pool: {e}")))?
+                .map_err(|e| {
+                    HalError::PipelineError(format!(
+                        "Failed to create bindless descriptor pool: {e}"
+                    ))
+                })?
         };
 
         // 4. Allocate the single global Descriptor Set
@@ -126,9 +139,9 @@ impl VulkanBindlessHeap {
             .set_layouts(&set_layouts);
 
         let descriptor_sets = unsafe {
-            device
-                .allocate_descriptor_sets(&alloc_info)
-                .map_err(|e| HalError::PipelineError(format!("Failed to allocate bindless descriptor set: {e}")))?
+            device.allocate_descriptor_sets(&alloc_info).map_err(|e| {
+                HalError::PipelineError(format!("Failed to allocate bindless descriptor set: {e}"))
+            })?
         };
 
         Ok(Self {
@@ -160,7 +173,9 @@ impl VulkanBindlessHeap {
             return Ok(slot);
         }
         if pool.next >= self.max_buffers {
-            return Err(HalError::OutOfMemory("Exceeded max bindless buffer capacity".to_string()));
+            return Err(HalError::OutOfMemory(
+                "Exceeded max bindless buffer capacity".to_string(),
+            ));
         }
         let slot = pool.next;
         pool.next += 1;
@@ -202,7 +217,9 @@ impl VulkanBindlessHeap {
             return Ok(slot);
         }
         if pool.next >= self.max_textures {
-            return Err(HalError::OutOfMemory("Exceeded max bindless texture capacity".to_string()));
+            return Err(HalError::OutOfMemory(
+                "Exceeded max bindless texture capacity".to_string(),
+            ));
         }
         let slot = pool.next;
         pool.next += 1;
@@ -243,7 +260,9 @@ impl VulkanBindlessHeap {
             return Ok(slot);
         }
         if pool.next >= self.max_samplers {
-            return Err(HalError::OutOfMemory("Exceeded max bindless sampler capacity".to_string()));
+            return Err(HalError::OutOfMemory(
+                "Exceeded max bindless sampler capacity".to_string(),
+            ));
         }
         let slot = pool.next;
         pool.next += 1;
@@ -255,14 +274,8 @@ impl VulkanBindlessHeap {
         pool.free.push(slot);
     }
 
-    pub fn write_sampler_descriptor(
-        &self,
-        device: &ash::Device,
-        slot: u32,
-        sampler: vk::Sampler,
-    ) {
-        let sampler_info = vk::DescriptorImageInfo::default()
-            .sampler(sampler);
+    pub fn write_sampler_descriptor(&self, device: &ash::Device, slot: u32, sampler: vk::Sampler) {
+        let sampler_info = vk::DescriptorImageInfo::default().sampler(sampler);
 
         let write = vk::WriteDescriptorSet::default()
             .dst_set(self.descriptor_set)
@@ -284,4 +297,3 @@ impl VulkanBindlessHeap {
         }
     }
 }
-

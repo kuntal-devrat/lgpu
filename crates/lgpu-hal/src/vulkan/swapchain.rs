@@ -1,9 +1,9 @@
 //! Vulkan swapchain presentation and surface integration.
 
-use ash::vk;
-use ash::khr::surface;
-use crate::HalError;
 use super::{VulkanCommandRecorder, VulkanDevice, VulkanTexture};
+use crate::HalError;
+use ash::khr::surface;
+use ash::vk;
 
 pub struct VulkanSwapchain {
     pub swapchain: vk::SwapchainKHR,
@@ -32,23 +32,31 @@ impl VulkanDevice {
         let caps = unsafe {
             surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, surface)
-                .map_err(|e| HalError::BackendError(format!("Failed to query surface capabilities: {e}")))?
+                .map_err(|e| {
+                    HalError::BackendError(format!("Failed to query surface capabilities: {e}"))
+                })?
         };
 
         let formats = unsafe {
             surface_loader
                 .get_physical_device_surface_formats(self.physical_device, surface)
-                .map_err(|e| HalError::BackendError(format!("Failed to query surface formats: {e}")))?
+                .map_err(|e| {
+                    HalError::BackendError(format!("Failed to query surface formats: {e}"))
+                })?
         };
 
         let present_modes = unsafe {
             surface_loader
                 .get_physical_device_surface_present_modes(self.physical_device, surface)
-                .map_err(|e| HalError::BackendError(format!("Failed to query surface present modes: {e}")))?
+                .map_err(|e| {
+                    HalError::BackendError(format!("Failed to query surface present modes: {e}"))
+                })?
         };
 
         if formats.is_empty() {
-            return Err(HalError::BackendError("No surface formats supported".to_string()));
+            return Err(HalError::BackendError(
+                "No surface formats supported".to_string(),
+            ));
         }
 
         let extent = if caps.current_extent.width != u32::MAX {
@@ -66,7 +74,11 @@ impl VulkanDevice {
         }
 
         let selected_format = if let Some(pref) = preferred_format {
-            formats.iter().find(|f| f.format == pref).cloned().unwrap_or(formats[0])
+            formats
+                .iter()
+                .find(|f| f.format == pref)
+                .cloned()
+                .unwrap_or(formats[0])
         } else {
             formats
                 .iter()
@@ -118,7 +130,9 @@ impl VulkanDevice {
                 unsafe {
                     loader.destroy_swapchain(swapchain, None);
                 }
-                return Err(HalError::BackendError(format!("Failed to get swapchain images: {e}")));
+                return Err(HalError::BackendError(format!(
+                    "Failed to get swapchain images: {e}"
+                )));
             }
         };
 
@@ -145,7 +159,9 @@ impl VulkanDevice {
                         }
                         loader.destroy_swapchain(swapchain, None);
                     }
-                    return Err(HalError::BackendError(format!("Failed to create swapchain image view: {e}")));
+                    return Err(HalError::BackendError(format!(
+                        "Failed to create swapchain image view: {e}"
+                    )));
                 }
             };
             views.push(view);
@@ -178,12 +194,18 @@ impl VulkanDevice {
         semaphore: vk::Semaphore,
         timeout_nanos: u64,
     ) -> Result<(u32, bool), HalError> {
-        let loader = self.swapchain_loader.as_ref().ok_or_else(|| {
-            HalError::BackendError("VK_KHR_swapchain is not enabled".to_string())
-        })?;
+        let loader = self
+            .swapchain_loader
+            .as_ref()
+            .ok_or_else(|| HalError::BackendError("VK_KHR_swapchain is not enabled".to_string()))?;
         unsafe {
             loader
-                .acquire_next_image(swapchain.swapchain, timeout_nanos, semaphore, vk::Fence::null())
+                .acquire_next_image(
+                    swapchain.swapchain,
+                    timeout_nanos,
+                    semaphore,
+                    vk::Fence::null(),
+                )
                 .map_err(|e| HalError::BackendError(format!("acquire_next_image failed: {e}")))
         }
     }
@@ -203,9 +225,10 @@ impl VulkanDevice {
         image_index: u32,
         wait_semaphores: &[vk::Semaphore],
     ) -> Result<bool, HalError> {
-        let loader = self.swapchain_loader.as_ref().ok_or_else(|| {
-            HalError::BackendError("VK_KHR_swapchain is not enabled".to_string())
-        })?;
+        let loader = self
+            .swapchain_loader
+            .as_ref()
+            .ok_or_else(|| HalError::BackendError("VK_KHR_swapchain is not enabled".to_string()))?;
 
         let swapchains = [swapchain];
         let image_indices = [image_index];
@@ -251,7 +274,8 @@ impl VulkanDevice {
         let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
 
         unsafe {
-            self.device.cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
         }
     }
 

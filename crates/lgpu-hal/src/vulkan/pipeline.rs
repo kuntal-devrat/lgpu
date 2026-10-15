@@ -3,8 +3,8 @@
 use ash::vk;
 use std::ffi::CString;
 
-use crate::{HalError, TextureFormat};
 use super::VulkanDevice;
+use crate::{HalError, TextureFormat};
 
 pub use ash::vk::Pipeline as RawPipeline;
 
@@ -257,8 +257,8 @@ impl VulkanDevice {
             .primitive_restart_enable(false);
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
@@ -308,12 +308,16 @@ impl VulkanDevice {
             .attachments(&color_blend_attachment);
 
         let color_formats = [vk_format];
-        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_formats);
+        let mut rendering_info =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
 
         let vk_depth_format = match desc.depth_format {
             Some(TextureFormat::Depth32Float) => Some(vk::Format::D32_SFLOAT),
-            Some(f) => return Err(HalError::BackendError(format!("Unsupported depth format: {f:?}"))),
+            Some(f) => {
+                return Err(HalError::BackendError(format!(
+                    "Unsupported depth format: {f:?}"
+                )))
+            }
             None => None,
         };
 
@@ -351,7 +355,9 @@ impl VulkanDevice {
         let pipelines = unsafe {
             self.device
                 .create_graphics_pipelines(self.pipeline_cache, &[pipeline_info], None)
-                .map_err(|(_, e)| HalError::PipelineError(format!("create_graphics_pipelines failed: {e}")))?
+                .map_err(|(_, e)| {
+                    HalError::PipelineError(format!("create_graphics_pipelines failed: {e}"))
+                })?
         };
 
         Ok(pipelines[0])
@@ -370,8 +376,7 @@ impl VulkanDevice {
             self.device
                 .destroy_descriptor_set_layout(pipeline.descriptor_set_layout, None);
             self.device.destroy_pipeline(pipeline.pipeline, None);
-            self.device
-                .destroy_pipeline_layout(pipeline.layout, None);
+            self.device.destroy_pipeline_layout(pipeline.layout, None);
         }
     }
 }

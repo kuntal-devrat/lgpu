@@ -1,11 +1,11 @@
 //! Vulkan command recording, render passes, copy operations, and queue submission.
 
-use ash::vk;
-use crate::HalError;
 use super::{
     bindless, VulkanBuffer, VulkanComputePipeline, VulkanDevice, VulkanTexture,
     VulkanTimelineSemaphore,
 };
+use crate::HalError;
+use ash::vk;
 
 pub struct VulkanCommandRecorder {
     pub(crate) command_pool: vk::CommandPool,
@@ -70,7 +70,8 @@ impl VulkanDevice {
             });
         }
 
-        let (command_pool, command_buffer) = match self.command_recorder_cache.lock().unwrap().pop() {
+        let (command_pool, command_buffer) = match self.command_recorder_cache.lock().unwrap().pop()
+        {
             Some((pool, cb)) => {
                 unsafe {
                     self.device
@@ -87,7 +88,9 @@ impl VulkanDevice {
                 let command_pool = unsafe {
                     self.device
                         .create_command_pool(&pool_info, None)
-                        .map_err(|e| HalError::CommandError(format!("Failed to create command pool: {e}")))?
+                        .map_err(|e| {
+                            HalError::CommandError(format!("Failed to create command pool: {e}"))
+                        })?
                 };
 
                 let alloc_info = vk::CommandBufferAllocateInfo::default()
@@ -95,17 +98,26 @@ impl VulkanDevice {
                     .level(vk::CommandBufferLevel::PRIMARY)
                     .command_buffer_count(1);
 
-                let command_buffer = match unsafe { self.device.allocate_command_buffers(&alloc_info) } {
-                    Ok(bufs) if !bufs.is_empty() => bufs[0],
-                    Ok(_) => {
-                        unsafe { self.device.destroy_command_pool(command_pool, None); }
-                        return Err(HalError::CommandError("Allocated 0 command buffers".to_string()));
-                    }
-                    Err(e) => {
-                        unsafe { self.device.destroy_command_pool(command_pool, None); }
-                        return Err(HalError::CommandError(format!("Failed to allocate command buffer: {e}")));
-                    }
-                };
+                let command_buffer =
+                    match unsafe { self.device.allocate_command_buffers(&alloc_info) } {
+                        Ok(bufs) if !bufs.is_empty() => bufs[0],
+                        Ok(_) => {
+                            unsafe {
+                                self.device.destroy_command_pool(command_pool, None);
+                            }
+                            return Err(HalError::CommandError(
+                                "Allocated 0 command buffers".to_string(),
+                            ));
+                        }
+                        Err(e) => {
+                            unsafe {
+                                self.device.destroy_command_pool(command_pool, None);
+                            }
+                            return Err(HalError::CommandError(format!(
+                                "Failed to allocate command buffer: {e}"
+                            )));
+                        }
+                    };
 
                 (command_pool, command_buffer)
             }
@@ -114,8 +126,14 @@ impl VulkanDevice {
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-        if let Err(e) = unsafe { self.device.begin_command_buffer(command_buffer, &begin_info) } {
-            self.command_recorder_cache.lock().unwrap().push((command_pool, command_buffer));
+        if let Err(e) = unsafe {
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+        } {
+            self.command_recorder_cache
+                .lock()
+                .unwrap()
+                .push((command_pool, command_buffer));
             return Err(HalError::CommandError(e.to_string()));
         }
 
@@ -127,9 +145,15 @@ impl VulkanDevice {
 
     pub fn recycle_command_recorder(&self, recorder: VulkanCommandRecorder) {
         unsafe {
-            let _ = self.device.reset_command_buffer(recorder.command_buffer, vk::CommandBufferResetFlags::empty());
+            let _ = self.device.reset_command_buffer(
+                recorder.command_buffer,
+                vk::CommandBufferResetFlags::empty(),
+            );
         }
-        self.command_recorder_cache.lock().unwrap().push((recorder.command_pool, recorder.command_buffer));
+        self.command_recorder_cache
+            .lock()
+            .unwrap()
+            .push((recorder.command_pool, recorder.command_buffer));
     }
 
     pub fn bind_buffers_to_compute_pipeline(
@@ -254,7 +278,8 @@ impl VulkanDevice {
                 .base_array_layer(0)
                 .layer_count(1);
 
-            let old_color_layout = color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            let old_color_layout =
+                color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
             let (src_stage, src_access) = match old_color_layout {
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
@@ -294,10 +319,12 @@ impl VulkanDevice {
                     .base_array_layer(0)
                     .layer_count(1);
 
-                let old_depth_layout = depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
+                let old_depth_layout =
+                    depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
                 let (depth_src_stage, depth_src_access) = match old_depth_layout {
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                         vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ),
                     _ => (
@@ -329,7 +356,10 @@ impl VulkanDevice {
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .store_op(vk::AttachmentStoreOp::STORE)
                     .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue { depth: clear_depth, stencil: 0 },
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: clear_depth,
+                            stencil: 0,
+                        },
                     });
                 depth_attachment_val = Some(depth_attachment);
             }
@@ -345,7 +375,9 @@ impl VulkanDevice {
             );
 
             let clear_value = vk::ClearValue {
-                color: vk::ClearColorValue { float32: clear_color },
+                color: vk::ClearColorValue {
+                    float32: clear_color,
+                },
             };
 
             let color_attachment = vk::RenderingAttachmentInfo::default()
@@ -373,7 +405,8 @@ impl VulkanDevice {
                 rendering_info = rendering_info.depth_attachment(da);
             }
 
-            self.device.cmd_begin_rendering(recorder.command_buffer, &rendering_info);
+            self.device
+                .cmd_begin_rendering(recorder.command_buffer, &rendering_info);
             self.device.cmd_end_rendering(recorder.command_buffer);
 
             let barrier_to_src = vk::ImageMemoryBarrier::default()
@@ -460,7 +493,8 @@ impl VulkanDevice {
                 .base_array_layer(0)
                 .layer_count(1);
 
-            let old_color_layout = color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            let old_color_layout =
+                color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
             let (src_stage, src_access) = match old_color_layout {
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
@@ -500,11 +534,13 @@ impl VulkanDevice {
                     .base_array_layer(0)
                     .layer_count(1);
 
-                let old_depth_layout = depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
+                let old_depth_layout =
+                    depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
 
                 let (depth_src_stage, depth_src_access) = match old_depth_layout {
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
                         vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ),
                     _ => (
@@ -541,14 +577,10 @@ impl VulkanDevice {
                             },
                         },
                     ),
-                    crate::LoadOp::Load => (
-                        vk::AttachmentLoadOp::LOAD,
-                        vk::ClearValue::default(),
-                    ),
-                    crate::LoadOp::DontCare => (
-                        vk::AttachmentLoadOp::DONT_CARE,
-                        vk::ClearValue::default(),
-                    ),
+                    crate::LoadOp::Load => (vk::AttachmentLoadOp::LOAD, vk::ClearValue::default()),
+                    crate::LoadOp::DontCare => {
+                        (vk::AttachmentLoadOp::DONT_CARE, vk::ClearValue::default())
+                    }
                 };
 
                 let depth_attachment = vk::RenderingAttachmentInfo::default()
@@ -577,14 +609,10 @@ impl VulkanDevice {
                         color: vk::ClearColorValue { float32: c },
                     },
                 ),
-                crate::LoadOp::Load => (
-                    vk::AttachmentLoadOp::LOAD,
-                    vk::ClearValue::default(),
-                ),
-                crate::LoadOp::DontCare => (
-                    vk::AttachmentLoadOp::DONT_CARE,
-                    vk::ClearValue::default(),
-                ),
+                crate::LoadOp::Load => (vk::AttachmentLoadOp::LOAD, vk::ClearValue::default()),
+                crate::LoadOp::DontCare => {
+                    (vk::AttachmentLoadOp::DONT_CARE, vk::ClearValue::default())
+                }
             };
 
             let color_attachment = vk::RenderingAttachmentInfo::default()
@@ -1073,12 +1101,8 @@ impl VulkanDevice {
             .dst_offset(dst_offset)
             .size(size);
         unsafe {
-            self.device.cmd_copy_buffer(
-                recorder.command_buffer,
-                src.buffer,
-                dst.buffer,
-                &[region],
-            );
+            self.device
+                .cmd_copy_buffer(recorder.command_buffer, src.buffer, dst.buffer, &[region]);
         }
     }
 
@@ -1106,7 +1130,8 @@ impl VulkanDevice {
                         vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
                     ),
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => (
-                        vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER
+                            | vk::PipelineStageFlags::COMPUTE_SHADER,
                         vk::AccessFlags::SHADER_READ,
                     ),
                     _ => (
@@ -1166,11 +1191,7 @@ impl VulkanDevice {
         }
     }
 
-    pub fn write_texture(
-        &self,
-        texture: &VulkanTexture,
-        data: &[u8],
-    ) -> Result<(), HalError> {
+    pub fn write_texture(&self, texture: &VulkanTexture, data: &[u8]) -> Result<(), HalError> {
         let staging_buf = self.create_buffer(&crate::BufferDesc {
             label: Some("staging_texture_upload"),
             size: data.len() as u64,
@@ -1329,7 +1350,10 @@ impl VulkanDevice {
                 vk_wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
             }
 
-            let next_val = self.internal_frame_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+            let next_val = self
+                .internal_frame_counter
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                + 1;
             let mut vk_signal_sems = Vec::with_capacity(signal_semaphores.len() + 1);
             let mut vk_signal_values = Vec::with_capacity(signal_semaphores.len() + 1);
             for (sem, val) in signal_semaphores {
@@ -1385,9 +1409,9 @@ impl VulkanDevice {
             None => {
                 let fence_info = vk::FenceCreateInfo::default();
                 unsafe {
-                    self.device
-                        .create_fence(&fence_info, None)
-                        .map_err(|e| HalError::CommandError(format!("Failed to create fence: {e}")))?
+                    self.device.create_fence(&fence_info, None).map_err(|e| {
+                        HalError::CommandError(format!("Failed to create fence: {e}"))
+                    })?
                 }
             }
         };
@@ -1401,16 +1425,19 @@ impl VulkanDevice {
         res
     }
 
-    pub fn submit_batches_and_wait(&self, recorders: Vec<VulkanCommandRecorder>) -> Result<(), HalError> {
+    pub fn submit_batches_and_wait(
+        &self,
+        recorders: Vec<VulkanCommandRecorder>,
+    ) -> Result<(), HalError> {
         let fence = self.fence_cache.lock().unwrap().pop();
         let fence = match fence {
             Some(f) => f,
             None => {
                 let fence_info = vk::FenceCreateInfo::default();
                 unsafe {
-                    self.device
-                        .create_fence(&fence_info, None)
-                        .map_err(|e| HalError::CommandError(format!("Failed to create fence: {e}")))?
+                    self.device.create_fence(&fence_info, None).map_err(|e| {
+                        HalError::CommandError(format!("Failed to create fence: {e}"))
+                    })?
                 }
             }
         };
@@ -1440,8 +1467,13 @@ impl VulkanDevice {
         unsafe {
             self.device.cmd_pipeline_barrier(
                 recorder.command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::VERTEX_INPUT
+                    | vk::PipelineStageFlags::DRAW_INDIRECT,
                 vk::DependencyFlags::empty(),
                 &[barrier],
                 &[],
@@ -1466,8 +1498,13 @@ impl VulkanDevice {
         unsafe {
             self.device.cmd_pipeline_barrier(
                 recorder.command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::VERTEX_INPUT | vk::PipelineStageFlags::HOST,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::VERTEX_INPUT
+                    | vk::PipelineStageFlags::HOST,
                 vk::DependencyFlags::empty(),
                 &[],
                 &[barrier],

@@ -1,20 +1,26 @@
 //! Integration tests for C FFI surface lifecycle, presentation, device idling, and ABI stability.
 
-use std::ptr;
 use lgpu_c::*;
+use std::ptr;
 
 #[test]
 fn test_c_device_wait_idle() {
     unsafe {
         // Null safety
-        assert_eq!(lgpu_device_wait_idle(ptr::null_mut()), LgpuResult::ErrorGeneric);
+        assert_eq!(
+            lgpu_device_wait_idle(ptr::null_mut()),
+            LgpuResult::ErrorGeneric
+        );
 
         let mut instance: *mut LgpuInstanceWrapper = ptr::null_mut();
         assert_eq!(lgpu_create_instance(&mut instance), LgpuResult::Success);
 
         let mut device: *mut LgpuDeviceWrapper = ptr::null_mut();
         let mut queue: *mut LgpuQueueWrapper = ptr::null_mut();
-        assert_eq!(lgpu_create_device(instance, 0, &mut device, &mut queue), LgpuResult::Success);
+        assert_eq!(
+            lgpu_create_device(instance, 0, &mut device, &mut queue),
+            LgpuResult::Success
+        );
 
         // Wait idle should succeed
         assert_eq!(lgpu_device_wait_idle(device), LgpuResult::Success);
@@ -29,11 +35,26 @@ fn test_c_device_wait_idle() {
 fn test_c_surface_lifecycle_and_presentation() {
     unsafe {
         // Null pointer safety checks
-        assert_eq!(lgpu_create_surface_headless(ptr::null_mut(), ptr::null_mut()), LgpuResult::ErrorGeneric);
-        assert_eq!(lgpu_surface_configure(ptr::null_mut(), ptr::null_mut(), ptr::null()), LgpuResult::ErrorGeneric);
-        assert_eq!(lgpu_surface_get_current_texture(ptr::null_mut(), ptr::null_mut()), LgpuResult::ErrorGeneric);
-        assert_eq!(lgpu_surface_texture_get_texture(ptr::null_mut()), ptr::null_mut());
-        assert_eq!(lgpu_queue_submit_surface(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()), LgpuResult::ErrorGeneric);
+        assert_eq!(
+            lgpu_create_surface_headless(ptr::null_mut(), ptr::null_mut()),
+            LgpuResult::ErrorGeneric
+        );
+        assert_eq!(
+            lgpu_surface_configure(ptr::null_mut(), ptr::null_mut(), ptr::null()),
+            LgpuResult::ErrorGeneric
+        );
+        assert_eq!(
+            lgpu_surface_get_current_texture(ptr::null_mut(), ptr::null_mut()),
+            LgpuResult::ErrorGeneric
+        );
+        assert_eq!(
+            lgpu_surface_texture_get_texture(ptr::null_mut()),
+            ptr::null_mut()
+        );
+        assert_eq!(
+            lgpu_queue_submit_surface(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()),
+            LgpuResult::ErrorGeneric
+        );
         lgpu_surface_texture_destroy(ptr::null_mut());
         lgpu_destroy_surface(ptr::null_mut());
 
@@ -42,7 +63,10 @@ fn test_c_surface_lifecycle_and_presentation() {
 
         let mut device: *mut LgpuDeviceWrapper = ptr::null_mut();
         let mut queue: *mut LgpuQueueWrapper = ptr::null_mut();
-        assert_eq!(lgpu_create_device(instance, 0, &mut device, &mut queue), LgpuResult::Success);
+        assert_eq!(
+            lgpu_create_device(instance, 0, &mut device, &mut queue),
+            LgpuResult::Success
+        );
 
         let mut surface: *mut LgpuSurfaceWrapper = ptr::null_mut();
         let res = lgpu_create_surface_headless(instance, &mut surface);
@@ -58,15 +82,21 @@ fn test_c_surface_lifecycle_and_presentation() {
         let config = LgpuSurfaceConfig {
             width: 640,
             height: 480,
-            format: 2, // Bgra8Unorm
+            format: 2,     // Bgra8Unorm
             usage: 1 << 4, // RENDER_ATTACHMENT
             present_mode: LgpuPresentMode::Fifo,
         };
-        assert_eq!(lgpu_surface_configure(surface, device, &config), LgpuResult::Success);
+        assert_eq!(
+            lgpu_surface_configure(surface, device, &config),
+            LgpuResult::Success
+        );
 
         // Acquire surface texture
         let mut surface_texture: *mut LgpuSurfaceTextureWrapper = ptr::null_mut();
-        assert_eq!(lgpu_surface_get_current_texture(surface, &mut surface_texture), LgpuResult::Success);
+        assert_eq!(
+            lgpu_surface_get_current_texture(surface, &mut surface_texture),
+            LgpuResult::Success
+        );
         assert!(!surface_texture.is_null());
 
         let texture = lgpu_surface_texture_get_texture(surface_texture);
@@ -76,7 +106,10 @@ fn test_c_surface_lifecycle_and_presentation() {
 
         // Record a command buffer to clear the surface texture
         let mut encoder: *mut LgpuCommandEncoderWrapper = ptr::null_mut();
-        assert_eq!(lgpu_create_command_encoder(device, &mut encoder), LgpuResult::Success);
+        assert_eq!(
+            lgpu_create_command_encoder(device, &mut encoder),
+            LgpuResult::Success
+        );
 
         let clear_color = [0.2f32, 0.4, 0.6, 1.0];
         lgpu_clear_and_render_texture(encoder, texture, clear_color.as_ptr());
@@ -85,7 +118,10 @@ fn test_c_surface_lifecycle_and_presentation() {
         assert!(!cmd.is_null());
 
         // Submit surface command and present
-        assert_eq!(lgpu_queue_submit_surface(queue, cmd, surface_texture), LgpuResult::Success);
+        assert_eq!(
+            lgpu_queue_submit_surface(queue, cmd, surface_texture),
+            LgpuResult::Success
+        );
 
         // Cleanup
         lgpu_destroy_command_buffer(cmd);
@@ -108,12 +144,18 @@ fn test_c_adapter_info_abi_stability() {
         assert_eq!(lgpu_create_instance(&mut instance), LgpuResult::Success);
 
         let mut info: LgpuAdapterInfo = std::mem::zeroed();
-        assert_eq!(lgpu_get_adapter_info(instance, 0, &mut info), LgpuResult::Success);
+        assert_eq!(
+            lgpu_get_adapter_info(instance, 0, &mut info),
+            LgpuResult::Success
+        );
 
         // Check uint8_t boolean flags
         assert!(info.supports_dynamic_rendering == 0 || info.supports_dynamic_rendering == 1);
         assert!(info.supports_timeline_semaphores == 0 || info.supports_timeline_semaphores == 1);
-        assert_eq!(info.supports_descriptor_indexing, 1, "Vulkan 1.2+ must support descriptor indexing");
+        assert_eq!(
+            info.supports_descriptor_indexing, 1,
+            "Vulkan 1.2+ must support descriptor indexing"
+        );
 
         lgpu_destroy_instance(instance);
     }

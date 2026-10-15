@@ -4,9 +4,9 @@ use std::ffi::{c_char, c_void, CString};
 use std::ptr::{self, NonNull};
 
 use lgpu::{
-    AddressMode, Backend, BindlessComputePipeline, BufferDesc, BufferUsage, DeviceType,
-    FilterMode, GraphicsPipeline, Instance, MemoryLocation, Sampler, SamplerDesc, Texture,
-    TextureDesc, TextureFormat, TextureUsage,
+    AddressMode, Backend, BindlessComputePipeline, BufferDesc, BufferUsage, DeviceType, FilterMode,
+    GraphicsPipeline, Instance, MemoryLocation, Sampler, SamplerDesc, Texture, TextureDesc,
+    TextureFormat, TextureUsage,
 };
 
 // Struct wrappers for raw pointers
@@ -105,8 +105,6 @@ pub struct LgpuAdapterInfo {
     pub max_compute_workgroup_invocations: u32,
     pub max_compute_workgroup_size: [u32; 3],
 }
-
-
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -725,7 +723,10 @@ pub unsafe extern "C" fn lgpu_queue_submit_async(
         }
     }
 
-    match q.queue.submit_batches_async(cmds, &wait_tuples, &signal_tuples) {
+    match q
+        .queue
+        .submit_batches_async(cmds, &wait_tuples, &signal_tuples)
+    {
         Ok(_) => LgpuResult::Success,
         Err(_) => LgpuResult::ErrorCommand,
     }
@@ -870,7 +871,6 @@ pub unsafe extern "C" fn lgpu_destroy_timeline_semaphore(
         drop(Box::from_raw(semaphore));
     }
 }
-
 
 /// Creates a 2D or 3D GPU texture.
 ///
@@ -1052,7 +1052,12 @@ pub unsafe extern "C" fn lgpu_create_graphics_pipeline(
     depth_write: bool,
     out_pipeline: *mut *mut LgpuGraphicsPipelineWrapper,
 ) -> LgpuResult {
-    if device.is_null() || shader.is_null() || vs_entry.is_null() || fs_entry.is_null() || out_pipeline.is_null() {
+    if device.is_null()
+        || shader.is_null()
+        || vs_entry.is_null()
+        || fs_entry.is_null()
+        || out_pipeline.is_null()
+    {
         return LgpuResult::ErrorGeneric;
     }
     let dev = &*device;
@@ -1108,7 +1113,9 @@ pub unsafe extern "C" fn lgpu_create_graphics_pipeline(
 ///
 /// `pipeline` must be a valid pointer or null. It must not be used after destruction.
 #[no_mangle]
-pub unsafe extern "C" fn lgpu_destroy_graphics_pipeline(pipeline: *mut LgpuGraphicsPipelineWrapper) {
+pub unsafe extern "C" fn lgpu_destroy_graphics_pipeline(
+    pipeline: *mut LgpuGraphicsPipelineWrapper,
+) {
     if !pipeline.is_null() {
         drop(Box::from_raw(pipeline));
     }
@@ -1129,7 +1136,11 @@ pub unsafe extern "C" fn lgpu_clear_and_render_with_depth(
     clear_color: *const f32,
     clear_depth: f32,
 ) {
-    if encoder.is_null() || color_texture.is_null() || depth_texture.is_null() || clear_color.is_null() {
+    if encoder.is_null()
+        || color_texture.is_null()
+        || depth_texture.is_null()
+        || clear_color.is_null()
+    {
         return;
     }
     // Prevent attachment aliasing
@@ -1140,7 +1151,12 @@ pub unsafe extern "C" fn lgpu_clear_and_render_with_depth(
     let col = &*color_texture;
     let dep = &*depth_texture;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
         let _ = enc.clear_and_render_with_depth(&col.texture, &dep.texture, color_arr, clear_depth);
@@ -1167,7 +1183,12 @@ pub unsafe extern "C" fn lgpu_draw_with_depth(
     clear_color: *const f32,
     clear_depth: f32,
 ) {
-    if encoder.is_null() || color_texture.is_null() || depth_texture.is_null() || pipeline.is_null() || clear_color.is_null() {
+    if encoder.is_null()
+        || color_texture.is_null()
+        || depth_texture.is_null()
+        || pipeline.is_null()
+        || clear_color.is_null()
+    {
         return;
     }
     // Prevent attachment aliasing
@@ -1179,7 +1200,12 @@ pub unsafe extern "C" fn lgpu_draw_with_depth(
     let dep = &*depth_texture;
     let pip = &*pipeline;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
         std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
@@ -1218,7 +1244,12 @@ pub unsafe extern "C" fn lgpu_clear_and_render_texture(
     let enc_wrapper = &mut *encoder;
     let tex = &*texture;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
         let _ = enc.clear_and_render_texture(&tex.texture, color_arr);
@@ -1248,7 +1279,12 @@ pub unsafe extern "C" fn lgpu_draw(
     let tex = &*texture;
     let pip = &*pipeline;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
         std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
@@ -1257,7 +1293,13 @@ pub unsafe extern "C" fn lgpu_draw(
     };
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        let _ = enc.draw(&tex.texture, &pip.pipeline, vertex_count, pc_slice, color_arr);
+        let _ = enc.draw(
+            &tex.texture,
+            &pip.pipeline,
+            vertex_count,
+            pc_slice,
+            color_arr,
+        );
     }
 }
 
@@ -1281,7 +1323,12 @@ pub unsafe extern "C" fn lgpu_render_triangle(
     let tex = &*texture;
     let pip = &*pipeline;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     if let Some(enc) = &mut enc_wrapper.encoder {
         let _ = enc.render_triangle(&tex.texture, &pip.pipeline, color_arr);
@@ -1333,7 +1380,13 @@ pub unsafe extern "C" fn lgpu_copy_buffer_to_buffer(
     let dst = &*destination;
 
     if let Some(enc) = &mut enc_wrapper.encoder {
-        enc.copy_buffer_to_buffer(&src.buffer, source_offset, &dst.buffer, destination_offset, size);
+        enc.copy_buffer_to_buffer(
+            &src.buffer,
+            source_offset,
+            &dst.buffer,
+            destination_offset,
+            size,
+        );
     }
 }
 
@@ -1417,7 +1470,12 @@ pub unsafe extern "C" fn lgpu_draw_indexed(
     push_constants_size: usize,
     clear_color: *const f32,
 ) {
-    if encoder.is_null() || texture.is_null() || pipeline.is_null() || index_buffer.is_null() || clear_color.is_null() {
+    if encoder.is_null()
+        || texture.is_null()
+        || pipeline.is_null()
+        || index_buffer.is_null()
+        || clear_color.is_null()
+    {
         return;
     }
     let enc_wrapper = &mut *encoder;
@@ -1425,7 +1483,12 @@ pub unsafe extern "C" fn lgpu_draw_indexed(
     let pip = &*pipeline;
     let idx_buf = &*index_buffer;
     let color_slice = std::slice::from_raw_parts(clear_color, 4);
-    let color_arr = [color_slice[0], color_slice[1], color_slice[2], color_slice[3]];
+    let color_arr = [
+        color_slice[0],
+        color_slice[1],
+        color_slice[2],
+        color_slice[3],
+    ];
 
     let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
         std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
@@ -1544,7 +1607,8 @@ pub unsafe extern "C" fn lgpu_create_bindless_compute_pipeline(
 
     match dev.device.create_bindless_compute_pipeline(&sh.shader) {
         Ok(pipeline) => {
-            *out_pipeline = Box::into_raw(Box::new(LgpuBindlessComputePipelineWrapper { pipeline }));
+            *out_pipeline =
+                Box::into_raw(Box::new(LgpuBindlessComputePipelineWrapper { pipeline }));
             LgpuResult::Success
         }
         Err(_) => LgpuResult::ErrorPipeline,
@@ -1695,7 +1759,9 @@ pub unsafe extern "C" fn lgpu_destroy_command_encoder(encoder: *mut LgpuCommandE
 /// `command_buffer` must be a valid pointer obtained from `lgpu_finish_encoder`, or null.
 /// Once destroyed, the pointer must not be dereferenced or reused.
 #[no_mangle]
-pub unsafe extern "C" fn lgpu_destroy_command_buffer(command_buffer: *mut LgpuCommandBufferWrapper) {
+pub unsafe extern "C" fn lgpu_destroy_command_buffer(
+    command_buffer: *mut LgpuCommandBufferWrapper,
+) {
     if !command_buffer.is_null() {
         drop(Box::from_raw(command_buffer));
     }
@@ -1761,10 +1827,12 @@ pub unsafe extern "C" fn lgpu_create_surface_from_xlib(
     let display_handle = raw_window_handle::RawDisplayHandle::Xlib(
         raw_window_handle::XlibDisplayHandle::new(NonNull::new(dpy), 0),
     );
-    let window_handle = raw_window_handle::RawWindowHandle::Xlib(
-        raw_window_handle::XlibWindowHandle::new(window),
-    );
-    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+    let window_handle =
+        raw_window_handle::RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle::new(window));
+    match (*instance)
+        .instance
+        .create_surface_raw(display_handle, window_handle)
+    {
         Ok(surface) => {
             let wrapper = Box::new(LgpuSurfaceWrapper { surface });
             *out_surface = Box::into_raw(wrapper);
@@ -1801,7 +1869,10 @@ pub unsafe extern "C" fn lgpu_create_surface_from_xcb(
     let window_handle = raw_window_handle::RawWindowHandle::Xcb(
         raw_window_handle::XcbWindowHandle::new(non_zero_win),
     );
-    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+    match (*instance)
+        .instance
+        .create_surface_raw(display_handle, window_handle)
+    {
         Ok(surface) => {
             let wrapper = Box::new(LgpuSurfaceWrapper { surface });
             *out_surface = Box::into_raw(wrapper);
@@ -1834,7 +1905,10 @@ pub unsafe extern "C" fn lgpu_create_surface_from_wayland(
     let window_handle = raw_window_handle::RawWindowHandle::Wayland(
         raw_window_handle::WaylandWindowHandle::new(NonNull::new_unchecked(surface)),
     );
-    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+    match (*instance)
+        .instance
+        .create_surface_raw(display_handle, window_handle)
+    {
         Ok(surface) => {
             let wrapper = Box::new(LgpuSurfaceWrapper { surface });
             *out_surface = Box::into_raw(wrapper);
@@ -1871,7 +1945,10 @@ pub unsafe extern "C" fn lgpu_create_surface_from_win32(
     let window_handle = raw_window_handle::RawWindowHandle::Win32(
         raw_window_handle::Win32WindowHandle::new(non_zero_hwnd),
     );
-    match (*instance).instance.create_surface_raw(display_handle, window_handle) {
+    match (*instance)
+        .instance
+        .create_surface_raw(display_handle, window_handle)
+    {
         Ok(surface) => {
             let wrapper = Box::new(LgpuSurfaceWrapper { surface });
             *out_surface = Box::into_raw(wrapper);
@@ -1919,7 +1996,10 @@ pub unsafe extern "C" fn lgpu_surface_configure(
         height: (*config).height,
         present_mode: rust_present_mode,
     };
-    match (*surface).surface.configure(&(*device).device, &rust_config) {
+    match (*surface)
+        .surface
+        .configure(&(*device).device, &rust_config)
+    {
         Ok(()) => LgpuResult::Success,
         Err(_) => LgpuResult::ErrorGeneric,
     }
@@ -2025,4 +2105,3 @@ pub unsafe extern "C" fn lgpu_destroy_surface(surface: *mut LgpuSurfaceWrapper) 
         drop(Box::from_raw(surface));
     }
 }
-

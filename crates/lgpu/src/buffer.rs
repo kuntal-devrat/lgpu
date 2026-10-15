@@ -1,7 +1,7 @@
 //! GPU buffer allocation and data streaming.
 
-use std::sync::Arc;
 use crate::Error;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferId(pub u32);

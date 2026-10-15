@@ -1,6 +1,9 @@
 //! Integration tests verifying HAL architecture, modular submodule exports, and backend traits.
 
-use lgpu_hal::{BufferDesc, BufferUsage, HalAdapter, HalBackend, HalDevice, HalInstance, MemoryLocation, TextureFormat, VulkanBackend};
+use lgpu_hal::{
+    BufferDesc, BufferUsage, HalAdapter, HalBackend, HalDevice, HalInstance, MemoryLocation,
+    TextureFormat, VulkanBackend,
+};
 
 #[test]
 fn test_texture_format_vk_conversions() {
@@ -29,18 +32,24 @@ fn test_lgpu_modular_exports() {
     use lgpu::instance::Instance;
 
     let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
     if adapters.is_empty() {
         return;
     }
 
-    let (device, _queue) = adapters[0].request_device(&instance).expect("Failed to create device");
-    let buf: Buffer = device.create_buffer(&BufferDesc {
-        label: Some("modular_test_buf"),
-        size: 256,
-        usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
-        memory_location: MemoryLocation::CpuToGpu,
-    }).expect("Failed to create buffer");
+    let (device, _queue) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to create device");
+    let buf: Buffer = device
+        .create_buffer(&BufferDesc {
+            label: Some("modular_test_buf"),
+            size: 256,
+            usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            memory_location: MemoryLocation::CpuToGpu,
+        })
+        .expect("Failed to create buffer");
 
     assert!(buf.id().is_some());
 }
@@ -60,15 +69,20 @@ fn test_hal_vulkan_modular_exports() {
     };
 
     let instance = VulkanInstance::new().expect("Failed to create VulkanInstance");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
     if adapters.is_empty() {
         return;
     }
 
-    let dev: VulkanDevice = instance.create_device(&adapters[0]).expect("Failed to create VulkanDevice");
+    let dev: VulkanDevice = instance
+        .create_device(&adapters[0])
+        .expect("Failed to create VulkanDevice");
     assert!(dev.queue_family_index < 32);
 
     // Ensure types from submodules are usable
+    #[allow(clippy::too_many_arguments)]
     fn _assert_types(
         _b: Option<VulkanBuffer>,
         _t: Option<VulkanTexture>,
@@ -78,15 +92,18 @@ fn test_hal_vulkan_modular_exports() {
         _sem: Option<VulkanTimelineSemaphore>,
         _sh: Option<VulkanShader>,
         _ad: Option<VulkanAdapter>,
-    ) {}
+    ) {
+    }
     _assert_types(None, None, None, None, None, None, None, None);
 }
 
 #[test]
 fn test_hal_traits_abstraction() {
     // Verify HalBackend, HalInstance, HalAdapter, HalDevice traits work uniformly
-    let instance = <VulkanBackend as HalBackend>::Instance::new().expect("Failed to create instance via HalBackend");
-    let adapters = HalInstance::enumerate_adapters(&instance).expect("HalInstance::enumerate_adapters");
+    let instance = <VulkanBackend as HalBackend>::Instance::new()
+        .expect("Failed to create instance via HalBackend");
+    let adapters =
+        HalInstance::enumerate_adapters(&instance).expect("HalInstance::enumerate_adapters");
     if adapters.is_empty() {
         return;
     }
@@ -94,16 +111,22 @@ fn test_hal_traits_abstraction() {
     let info = HalAdapter::info(&adapters[0]);
     assert!(!info.name.is_empty());
 
-    let device = HalInstance::create_device(&instance, &adapters[0]).expect("HalInstance::create_device");
+    let device =
+        HalInstance::create_device(&instance, &adapters[0]).expect("HalInstance::create_device");
 
-    let buf = HalDevice::create_buffer(&device, &BufferDesc {
-        label: Some("hal_buf"),
-        size: 128,
-        usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
-        memory_location: MemoryLocation::CpuToGpu,
-    }).expect("HalDevice::create_buffer");
+    let buf = HalDevice::create_buffer(
+        &device,
+        &BufferDesc {
+            label: Some("hal_buf"),
+            size: 128,
+            usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            memory_location: MemoryLocation::CpuToGpu,
+        },
+    )
+    .expect("HalDevice::create_buffer");
 
-    let slot = HalDevice::register_bindless_buffer(&device, &buf).expect("HalDevice::register_bindless_buffer");
+    let slot = HalDevice::register_bindless_buffer(&device, &buf)
+        .expect("HalDevice::register_bindless_buffer");
     assert!(slot < 16384);
 
     let test_bytes = [42u8; 16];

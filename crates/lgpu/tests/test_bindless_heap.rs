@@ -5,7 +5,9 @@ use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation};
 #[test]
 fn test_bindless_heap_slot_allocation_and_recycling() {
     let instance = Instance::new().expect("Failed to initialize lgpu");
-    let adapters = instance.enumerate_adapters().expect("Failed to enumerate adapters");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
     assert!(!adapters.is_empty(), "No adapter found");
 
     let (device, _queue) = adapters[0]
@@ -24,7 +26,9 @@ fn test_bindless_heap_slot_allocation_and_recycling() {
     // 1. Allocate 10 buffers and ensure unique slot IDs
     let mut buffers = Vec::new();
     for i in 0..10 {
-        let buf = device.create_buffer(&desc).expect("Failed to create buffer");
+        let buf = device
+            .create_buffer(&desc)
+            .expect("Failed to create buffer");
         let id = buf.id().expect("Buffer should have a bindless ID");
         println!("  Allocated buffer {} -> Bindless Slot {}", i, id.0);
         assert_eq!(id.0, i as u32);
@@ -39,8 +43,12 @@ fn test_bindless_heap_slot_allocation_and_recycling() {
     assert_eq!(dropped_id_7.0, 7);
 
     // 3. Allocate 2 new buffers: verify slot recycling
-    let recycled_1 = device.create_buffer(&desc).expect("Failed to create recycled buffer 1");
-    let recycled_2 = device.create_buffer(&desc).expect("Failed to create recycled buffer 2");
+    let recycled_1 = device
+        .create_buffer(&desc)
+        .expect("Failed to create recycled buffer 1");
+    let recycled_2 = device
+        .create_buffer(&desc)
+        .expect("Failed to create recycled buffer 2");
 
     let rec_id_1 = recycled_1.id().unwrap();
     let rec_id_2 = recycled_2.id().unwrap();

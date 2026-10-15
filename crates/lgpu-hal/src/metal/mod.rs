@@ -6,11 +6,11 @@
 //! - Modern Metal Shading Language (MSL 3.0+) compute & render pipelines
 
 #![allow(dead_code, unused_imports)]
-use std::sync::Mutex;
 use crate::{
     AdapterInfo, Backend, BufferDesc, BufferUsage, DeviceType, HalError, MemoryLocation,
     SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
 };
+use std::sync::Mutex;
 
 pub struct MetalBindlessHeap {
     next_buffer_id: u32,
@@ -372,16 +372,28 @@ impl MetalDevice {
         })
     }
 
-    pub fn write_buffer(&self, buffer: &MetalBuffer, offset: u64, bytes: &[u8]) -> Result<(), HalError> {
+    pub fn write_buffer(
+        &self,
+        buffer: &MetalBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), HalError> {
         buffer.write_at(offset, bytes)
     }
 
-    pub fn read_buffer(&self, buffer: &MetalBuffer, offset: u64, dest: &mut [u8]) -> Result<(), HalError> {
+    pub fn read_buffer(
+        &self,
+        buffer: &MetalBuffer,
+        offset: u64,
+        dest: &mut [u8],
+    ) -> Result<(), HalError> {
         buffer.read_at(offset, dest)
     }
 
     pub fn register_bindless_buffer(&self, buffer: &MetalBuffer) -> Result<u32, HalError> {
-        buffer.bindless_id.ok_or_else(|| HalError::BackendError("Buffer has no bindless slot".to_string()))
+        buffer
+            .bindless_id
+            .ok_or_else(|| HalError::BackendError("Buffer has no bindless slot".to_string()))
     }
 
     pub fn unregister_bindless_buffer(&self, slot: u32) {
@@ -389,7 +401,9 @@ impl MetalDevice {
     }
 
     pub fn register_bindless_texture(&self, texture: &MetalTexture) -> Result<u32, HalError> {
-        texture.bindless_id.ok_or_else(|| HalError::BackendError("Texture has no bindless slot".to_string()))
+        texture
+            .bindless_id
+            .ok_or_else(|| HalError::BackendError("Texture has no bindless slot".to_string()))
     }
 
     pub fn unregister_bindless_texture(&self, slot: u32) {
@@ -397,7 +411,9 @@ impl MetalDevice {
     }
 
     pub fn register_bindless_sampler(&self, sampler: &MetalSampler) -> Result<u32, HalError> {
-        sampler.bindless_id.ok_or_else(|| HalError::BackendError("Sampler has no bindless slot".to_string()))
+        sampler
+            .bindless_id
+            .ok_or_else(|| HalError::BackendError("Sampler has no bindless slot".to_string()))
     }
 
     pub fn unregister_bindless_sampler(&self, slot: u32) {

@@ -1,8 +1,8 @@
 //! Tests for C FFI buffer-to-buffer copies and direct texture data transfers.
 
-use std::ptr;
-use std::ffi::c_void;
 use lgpu_c::*;
+use std::ffi::c_void;
+use std::ptr;
 
 #[test]
 fn test_c_buffer_copy_and_texture_write() {
@@ -24,7 +24,7 @@ fn test_c_buffer_copy_and_texture_write() {
             initial_data.as_ptr() as *const c_void,
             8,
             1 | 2 | 4, // TRANSFER_SRC | TRANSFER_DST | STORAGE
-            1, // CpuToGpu
+            1,         // CpuToGpu
             &mut src_buf,
         );
         assert_eq!(res, LgpuResult::Success);
@@ -34,7 +34,7 @@ fn test_c_buffer_copy_and_texture_write() {
             device,
             8,
             1 | 2 | 4, // TRANSFER_SRC | TRANSFER_DST | STORAGE
-            1, // CpuToGpu
+            1,         // CpuToGpu
             &mut dst_buf,
         );
         assert_eq!(res, LgpuResult::Success);
@@ -68,19 +68,14 @@ fn test_c_buffer_copy_and_texture_write() {
             4,
             4,
             1,
-            0, // RGBA8_UNORM
+            0,         // RGBA8_UNORM
             1 | 2 | 4, // COPY_SRC | COPY_DST | TEXTURE_BINDING
             &mut tex,
         );
         assert_eq!(res, LgpuResult::Success);
 
         let pixels = [255u8; 4 * 4 * 4];
-        let res = lgpu_device_write_texture(
-            device,
-            tex,
-            pixels.as_ptr(),
-            pixels.len(),
-        );
+        let res = lgpu_device_write_texture(device, tex, pixels.as_ptr(), pixels.len());
         assert_eq!(res, LgpuResult::Success);
 
         // Cleanup
