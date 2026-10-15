@@ -24,6 +24,7 @@ pub struct MemoryBlock {
     pub memory: vk::DeviceMemory,
     pub size: u64,
     pub memory_type_index: u32,
+    pub is_host_visible: bool,
     pub mapped_base: Option<*mut u8>,
     pub is_coherent: bool,
     pub free_chunks: Vec<(u64, u64)>, // (offset, size)
@@ -129,9 +130,9 @@ impl VulkanSuballocator {
             });
         }
 
-        // Search existing blocks for matching memory type and sufficient space
+        // Search existing blocks for matching memory type, host-visibility, and sufficient space
         for block in &mut self.blocks {
-            if block.memory_type_index == memory_type_index {
+            if block.memory_type_index == memory_type_index && block.is_host_visible == is_host_visible {
                 if let Some(offset) = block.allocate(size, alignment) {
                     let mapped_ptr = block.mapped_base.map(|base| unsafe { base.add(offset as usize) });
                     return Ok(AllocationResult {
@@ -176,6 +177,7 @@ impl VulkanSuballocator {
             memory,
             size: block_size,
             memory_type_index,
+            is_host_visible,
             mapped_base,
             is_coherent,
             free_chunks: vec![(0, block_size)],
