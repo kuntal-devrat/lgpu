@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build & Test (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Vulkan & Lavapipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools
+
+      - name: Configure Vulkan ICD
+        run: |
+          ls -la /usr/share/vulkan/icd.d/ || true
+          if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> $GITHUB_ENV
+          elif [ -f /usr/share/vulkan/icd.d/lvp_icd.json ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> $GITHUB_ENV
+          fi
+
+      - name: Verify Vulkan Environment
+        run: |
+          vulkaninfo --summary || true
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Run Integration Tests
+        run: cargo test --all --verbose
+
+      - name: Run Documentation Tests
+        run: cargo test --doc --verbose
+
+      - name: Build & Run C99 Example
+        run: |
+          cargo build -p lgpu-c
+          gcc -std=c99 examples/c_example/main.c -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o c_example
+          ./c_example
