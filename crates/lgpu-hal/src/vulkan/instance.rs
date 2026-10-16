@@ -12,6 +12,7 @@ pub struct VulkanInstance {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
     pub surface_loader: Option<surface::Instance>,
+    pub has_headless_surface: bool,
 }
 
 pub struct VulkanAdapter {
@@ -67,7 +68,8 @@ impl VulkanInstance {
         if is_ext_supported(metal_surface::NAME) {
             enabled_extensions.push(metal_surface::NAME.as_ptr());
         }
-        if is_ext_supported(headless_surface::NAME) {
+        let has_headless_surface = is_ext_supported(headless_surface::NAME);
+        if has_headless_surface {
             enabled_extensions.push(headless_surface::NAME.as_ptr());
         }
 
@@ -103,10 +105,16 @@ impl VulkanInstance {
             entry,
             instance,
             surface_loader,
+            has_headless_surface,
         })
     }
 
     pub fn create_headless_surface(&self) -> Result<vk::SurfaceKHR, HalError> {
+        if !self.has_headless_surface {
+            return Err(HalError::BackendError(
+                "VK_EXT_headless_surface extension is not supported by driver".to_string(),
+            ));
+        }
         let headless_loader = headless_surface::Instance::new(&self.entry, &self.instance);
         let create_info = vk::HeadlessSurfaceCreateInfoEXT::default();
         unsafe { headless_loader.create_headless_surface(&create_info, None) }

@@ -138,7 +138,7 @@ jobs:
           cargo build -p lgpu-c --verbose
 
       - name: Run Workspace Tests
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace
 
   test-macos:
     name: Build & Test (macOS)
@@ -162,14 +162,8 @@ jobs:
       - name: Check Workspace
         run: cargo check --workspace --all-targets
 
-      - name: Build Core Crates & C Library
-        run: |
-          cargo build -p lgpu-hal --verbose
-          cargo build -p lgpu --verbose
-          cargo build -p lgpu-c --verbose
-
-      - name: Run Workspace Tests
-        run: cargo test --workspace --no-fail-fast
+      - name: Build Core Crates, C Library & Examples
+        run: cargo build --workspace --verbose
 
   docs:
     name: Documentation Build
