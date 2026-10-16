@@ -127,9 +127,11 @@ impl Adapter {
 
         let device = Device {
             vulkan_device: Arc::clone(&device_arc),
+            _instance: Arc::clone(&instance.vulkan_instance),
         };
         let queue = Queue {
             vulkan_device: device_arc,
+            _instance: Arc::clone(&instance.vulkan_instance),
         };
 
         Ok((device, queue))

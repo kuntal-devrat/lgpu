@@ -10,13 +10,51 @@ use std::sync::Arc;
 
 pub struct Device {
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+    pub(crate) _instance: Arc<lgpu_hal::vulkan::VulkanInstance>,
 }
 
 pub struct Queue {
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+    pub(crate) _instance: Arc<lgpu_hal::vulkan::VulkanInstance>,
 }
 
 impl Device {
+    /// Convenience helper that initializes a default Vulkan 1.3 [`Instance`], selects
+    /// the first available physical GPU adapter, and returns the initialized [`Device`] and [`Queue`].
+    ///
+    /// Ideal for quick prototyping, headless compute jobs, and test suites.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let (device, queue) = lgpu::Device::default_device().expect("Failed to initialize GPU");
+    /// ```
+    pub fn default_device() -> Result<(Device, Queue), Error> {
+        let instance = crate::Instance::new()?;
+        let adapters = instance.enumerate_adapters()?;
+        if adapters.is_empty() {
+            return Err(Error::Hal(lgpu_hal::HalError::NoAdapterFound));
+        }
+        adapters[0].request_device(&instance)
+    }
+
+    /// Convenience helper that finishes recording on the given [`CommandEncoder`],
+    /// submits it to the queue, and blocks the CPU until execution completes.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use lgpu::Device;
+    /// # fn example(device: &Device, queue: &lgpu::Queue) -> Result<(), lgpu::Error> {
+    /// let encoder = device.create_command_encoder()?;
+    /// device.run(queue, encoder)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn run(&self, queue: &Queue, encoder: CommandEncoder) -> Result<(), Error> {
+        queue.run(encoder)
+    }
+
     /// Creates an uninitialized GPU [`Buffer`] according to [`BufferDesc`].
     ///
     /// # Example
@@ -346,6 +384,26 @@ impl Device {
 }
 
 impl Queue {
+    /// Finishes recording the given [`CommandEncoder`] into a command buffer, submits it
+    /// to the GPU queue, and waits synchronously for execution to finish.
+    ///
+    /// Ideal for one-shot data transfers, headless compute passes, and test fixtures.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use lgpu::{Device, Queue};
+    /// # fn example(device: &Device, queue: &Queue) -> Result<(), lgpu::Error> {
+    /// let encoder = device.create_command_encoder()?;
+    /// queue.run(encoder)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn run(&self, encoder: CommandEncoder) -> Result<(), Error> {
+        let cmd = encoder.finish();
+        self.submit(cmd)
+    }
+
     /// Submits a [`CommandBuffer`] to the GPU queue and waits synchronously for execution to finish.
     ///
     /// # Example

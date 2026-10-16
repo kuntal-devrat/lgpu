@@ -57,3 +57,16 @@ pub enum Error {
     #[error("Buffer error: {0}")]
     Buffer(String),
 }
+
+/// Convenience helper that initializes a default Vulkan 1.3 [`Instance`], selects
+/// the primary physical GPU, and returns the [`Device`] and [`Queue`].
+///
+/// # Example
+///
+/// ```no_run
+/// let (device, queue) = lgpu::default_device().expect("Failed to initialize GPU");
+/// ```
+#[cfg(feature = "vulkan")]
+pub fn default_device() -> Result<(Device, Queue), Error> {
+    Device::default_device()
+}

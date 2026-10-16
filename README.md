@@ -28,6 +28,8 @@ A lightweight Vulkan 1.3 wrapper for Rust and C99, built on top of [`ash`](https
 - **Not a `wgpu` replacement**: `wgpu` is an implementation of WebGPU targeting multiple backends (Metal, D3D12, Vulkan, WebGL) with shader translation and validation via `naga`. `lgpu` targets Vulkan 1.3 exclusively and expects precompiled SPIR-V shaders.
 - **Not a fully safe sandbox**: While `lgpu` provides RAII and safe wrapper structs where reasonable, Vulkan synchronization and shader indexing still require you to know how modern GPUs work.
 
+For a detailed technical breakdown of how `lgpu` compares to `wgpu` and `vulkano`, along with thread safety (`Send`/`Sync`), CPU buffer mapping invariants, and synchronization rules, see **[Architecture, Safety & Synchronization Model](docs/ARCHITECTURE_AND_SAFETY.md)**.
+
 ### Note on Development
 
 This project was built as a personal exploration into modern Vulkan 1.3 (dynamic rendering, descriptor indexing, and timeline semaphores). AI tools were used to help scaffold repetitive boilerplate—primarily the C99 FFI wrappers and test fixtures. All Vulkan 1.3 integration, dynamic rendering, and compute dispatches execute directly against native GPU hardware drivers.
