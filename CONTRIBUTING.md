@@ -73,3 +73,20 @@ cargo run --release -p example-voxel-renderer
 1. Create a feature branch off `main` (`git checkout -b feature/my-feature`).
 2. Verify that `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features`, and `cargo test --workspace` all pass.
 3. Open a PR with a description of the changes and any relevant hardware/driver details.
+
+---
+
+## CI & Release Lifecycle
+
+To protect repository stability and prevent unintended crate publishing as contributors submit code:
+
+1. **Pull Requests & Main Branch CI (`ci.yml`)**:
+   - Every pull request and push to `main` triggers automated CI validation.
+   - Runs formatting checks, Clippy lints (`-D warnings`), cross-platform test matrices (Linux Mesa/Lavapipe, Windows, macOS), doc builds, and dry-run package checks (`cargo publish --dry-run`).
+   - **No Releases**: PRs and merges to `main` **never** publish to crates.io or create GitHub releases. Contributions can be merged freely without version conflicts.
+
+2. **Releases & Publishing (`release.yml`)**:
+   - Releases are completely decoupled into a dedicated workflow.
+   - Triggered exclusively when a repository maintainer pushes a semantic version tag (`git tag v0.X.Y && git push origin v0.X.Y`) or manually runs the release workflow with `workflow_dispatch`.
+   - Built-in crates.io idempotency checks automatically detect whether crate versions are already live on crates.io, skipping published crates and preventing pipeline failures.
+
