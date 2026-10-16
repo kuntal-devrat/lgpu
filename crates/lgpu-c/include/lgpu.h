@@ -47,6 +47,17 @@ typedef struct lgpu_adapter_info {
     uint32_t max_compute_workgroup_size[3];
 } lgpu_adapter_info_t;
 
+typedef struct lgpu_device_limits {
+    uint64_t max_buffer_size;
+    uint32_t max_texture_dimension_1d;
+    uint32_t max_texture_dimension_2d;
+    uint32_t max_texture_dimension_3d;
+    uint32_t max_texture_array_layers;
+    uint64_t min_uniform_buffer_offset_alignment;
+    uint64_t min_storage_buffer_offset_alignment;
+    uint32_t max_compute_workgroup_invocations;
+    uint32_t max_compute_workgroup_size[3];
+} lgpu_device_limits_t;
 
 /* === Enums === */
 typedef enum lgpu_result {
@@ -142,6 +153,16 @@ lgpu_result_t lgpu_get_adapter_info(
     uint32_t index,
     lgpu_adapter_info_t* out_info
 );
+
+/** Get detailed adapter hardware limits */
+lgpu_result_t lgpu_adapter_get_limits(
+    lgpu_instance_t instance,
+    uint32_t index,
+    lgpu_device_limits_t* out_limits
+);
+
+/** Get last error message recorded on the calling thread */
+size_t lgpu_get_last_error_message(char* out_buf, size_t max_len);
 
 /** Request logical device and queue */
 lgpu_result_t lgpu_create_device(
@@ -496,6 +517,13 @@ lgpu_result_t lgpu_create_surface_from_win32(
     lgpu_instance_t instance,
     void* hinstance,
     void* hwnd,
+    lgpu_surface_t* out_surface
+);
+
+/** Create a macOS Metal window surface (from NSView* or CAMetalLayer*) */
+lgpu_result_t lgpu_create_surface_from_metal(
+    lgpu_instance_t instance,
+    void* layer_or_view,
     lgpu_surface_t* out_surface
 );
 

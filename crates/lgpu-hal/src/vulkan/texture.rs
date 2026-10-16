@@ -124,6 +124,7 @@ impl VulkanDevice {
             mem_type_index,
             false,
             is_coherent,
+            super::allocator::AllocationType::Optimal,
         )?;
 
         unsafe {
@@ -231,6 +232,50 @@ impl VulkanDevice {
         if let Some(heap) = &self.bindless_heap {
             heap.free_texture_slot(slot);
         }
+    }
+
+    pub fn register_bindless_storage_image(
+        &self,
+        texture: &VulkanTexture,
+    ) -> Result<u32, HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+        let slot = heap.allocate_storage_image_slot()?;
+        heap.write_storage_image_descriptor(
+            &self.device,
+            slot,
+            texture.view,
+            vk::ImageLayout::GENERAL,
+        );
+        Ok(slot)
+    }
+
+    pub fn unregister_bindless_storage_image(&self, slot: u32) {
+        if let Some(heap) = &self.bindless_heap {
+            heap.free_storage_image_slot(slot);
+        }
+    }
+
+    pub fn write_texture_descriptors_batch(
+        &self,
+        writes: &[(u32, &VulkanTexture)],
+    ) -> Result<(), HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+        let raw_writes: Vec<(u32, ash::vk::ImageView, ash::vk::ImageLayout)> = writes
+            .iter()
+            .map(|(slot, tex)| {
+                (
+                    *slot,
+                    tex.view,
+                    ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                )
+            })
+            .collect();
+        heap.write_texture_descriptors_batch(&self.device, &raw_writes);
+        Ok(())
     }
 
     pub fn create_sampler(&self, desc: &SamplerDesc) -> Result<VulkanSampler, HalError> {

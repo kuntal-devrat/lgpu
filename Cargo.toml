@@ -16,6 +16,12 @@ version = "0.1.0"
 edition = "2021"
 authors = ["lgpu contributors"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/kuntal-devrat/lgpu"
+homepage = "https://github.com/kuntal-devrat/lgpu"
+documentation = "https://docs.rs/lgpu"
+readme = "README.md"
+keywords = ["gpu", "vulkan", "bindless", "graphics", "compute"]
+categories = ["rendering::graphics-api", "game-development"]
 description = "Ultra-lightweight, bindless-first cross-platform GPU abstraction"
 
 [workspace.dependencies]

@@ -69,7 +69,10 @@ impl VulkanDevice {
             for r in recorders {
                 unsafe {
                     self.device
-                        .reset_command_buffer(r.command_buffer, vk::CommandBufferResetFlags::empty())
+                        .reset_command_buffer(
+                            r.command_buffer,
+                            vk::CommandBufferResetFlags::empty(),
+                        )
                         .ok();
                 }
                 cache.push((r.command_pool, r.command_buffer));

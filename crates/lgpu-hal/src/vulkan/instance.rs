@@ -175,6 +175,14 @@ impl VulkanInstance {
                     HalError::BackendError(format!("Failed to create Metal surface: {e}"))
                 })
             }
+            (RawDisplayHandle::UiKit(_), RawWindowHandle::UiKit(window)) => {
+                let metal_loader = metal_surface::Instance::new(&self.entry, &self.instance);
+                let create_info = vk::MetalSurfaceCreateInfoEXT::default()
+                    .layer(window.ui_view.as_ptr() as *const _);
+                unsafe { metal_loader.create_metal_surface(&create_info, None) }.map_err(|e| {
+                    HalError::BackendError(format!("Failed to create iOS Metal surface: {e}"))
+                })
+            }
             _ => Err(HalError::BackendError(
                 "Unsupported display/window handle pair for Vulkan surface creation".to_string(),
             )),
@@ -311,6 +319,23 @@ impl VulkanInstance {
                 supports_descriptor_indexing,
                 max_compute_workgroup_invocations: props.limits.max_compute_work_group_invocations,
                 max_compute_workgroup_size: props.limits.max_compute_work_group_size,
+                limits: crate::DeviceLimits {
+                    max_buffer_size: props.limits.max_storage_buffer_range as u64,
+                    max_texture_dimension_1d: props.limits.max_image_dimension1_d,
+                    max_texture_dimension_2d: props.limits.max_image_dimension2_d,
+                    max_texture_dimension_3d: props.limits.max_image_dimension3_d,
+                    max_texture_array_layers: props.limits.max_image_array_layers,
+                    min_uniform_buffer_offset_alignment: props
+                        .limits
+                        .min_uniform_buffer_offset_alignment,
+                    min_storage_buffer_offset_alignment: props
+                        .limits
+                        .min_storage_buffer_offset_alignment,
+                    max_compute_workgroup_invocations: props
+                        .limits
+                        .max_compute_work_group_invocations,
+                    max_compute_workgroup_size: props.limits.max_compute_work_group_size,
+                },
             };
 
             adapters.push(VulkanAdapter {
@@ -366,6 +391,10 @@ impl VulkanInstance {
         if swapchain_supported {
             enabled_extensions.push(swapchain::NAME.as_ptr());
         }
+        let portability_subset_ext = vk::KHR_PORTABILITY_SUBSET_NAME;
+        if is_dev_ext_supported(portability_subset_ext) {
+            enabled_extensions.push(portability_subset_ext.as_ptr());
+        }
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
@@ -404,6 +433,7 @@ impl VulkanInstance {
             bindless::DEFAULT_MAX_STORAGE_BUFFERS,
             bindless::DEFAULT_MAX_TEXTURES,
             bindless::DEFAULT_MAX_SAMPLERS,
+            bindless::DEFAULT_MAX_STORAGE_IMAGES,
         )
         .ok();
 

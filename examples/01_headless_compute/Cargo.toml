@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "example-headless-compute"
 version.workspace = true
 edition.workspace = true

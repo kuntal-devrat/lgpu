@@ -10,6 +10,14 @@ use ash::vk;
 pub const DEFAULT_BLOCK_SIZE: u64 = 32 * 1024 * 1024; // 32 MiB
 pub const SUBALLOCATION_THRESHOLD: u64 = 16 * 1024 * 1024; // 16 MiB
 
+/// Distinguishes linear resources (buffers) from non-linear resources (optimal textures)
+/// to respect Vulkan bufferImageGranularity rules and prevent memory aliasing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationType {
+    Linear,
+    Optimal,
+}
+
 #[derive(Debug)]
 pub struct AllocationResult {
     pub memory: vk::DeviceMemory,
@@ -25,6 +33,7 @@ pub struct MemoryBlock {
     pub size: u64,
     pub memory_type_index: u32,
     pub is_host_visible: bool,
+    pub allocation_type: AllocationType,
     pub mapped_base: Option<*mut u8>,
     pub is_coherent: bool,
     pub free_chunks: Vec<(u64, u64)>, // (offset, size)
@@ -38,7 +47,11 @@ impl MemoryBlock {
         let align = alignment.max(1);
         for i in 0..self.free_chunks.len() {
             let (chunk_offset, chunk_size) = self.free_chunks[i];
-            let aligned_offset = (chunk_offset + align - 1) & !(align - 1);
+            let aligned_offset = if align.is_power_of_two() {
+                (chunk_offset + align - 1) & !(align - 1)
+            } else {
+                ((chunk_offset + align - 1) / align) * align
+            };
             let padding = aligned_offset - chunk_offset;
             if chunk_size >= padding + size {
                 // Remove chunk and insert pre/post gaps
@@ -97,6 +110,7 @@ impl VulkanSuballocator {
         memory_type_index: u32,
         is_host_visible: bool,
         is_coherent: bool,
+        allocation_type: AllocationType,
     ) -> Result<AllocationResult, HalError> {
         // Large allocations exceed threshold: use dedicated allocation
         if size >= SUBALLOCATION_THRESHOLD {
@@ -130,10 +144,11 @@ impl VulkanSuballocator {
             });
         }
 
-        // Search existing blocks for matching memory type, host-visibility, and sufficient space
+        // Search existing blocks for matching memory type, host-visibility, allocation type, and sufficient space
         for block in &mut self.blocks {
             if block.memory_type_index == memory_type_index
                 && block.is_host_visible == is_host_visible
+                && block.allocation_type == allocation_type
             {
                 if let Some(offset) = block.allocate(size, alignment) {
                     let mapped_ptr = block
@@ -182,6 +197,7 @@ impl VulkanSuballocator {
             size: block_size,
             memory_type_index,
             is_host_visible,
+            allocation_type,
             mapped_base,
             is_coherent,
             free_chunks: vec![(0, block_size)],

@@ -80,6 +80,7 @@ impl VulkanDevice {
             mem_type_index,
             is_host_visible,
             is_coherent,
+            super::allocator::AllocationType::Linear,
         )?;
 
         unsafe {
@@ -232,5 +233,20 @@ impl VulkanDevice {
         if let Some(heap) = &self.bindless_heap {
             heap.free_buffer_slot(slot);
         }
+    }
+
+    pub fn write_buffer_descriptors_batch(
+        &self,
+        writes: &[(u32, &VulkanBuffer)],
+    ) -> Result<(), HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+        let raw_writes: Vec<(u32, ash::vk::Buffer, u64)> = writes
+            .iter()
+            .map(|(slot, buf)| (*slot, buf.buffer, buf.size))
+            .collect();
+        heap.write_buffer_descriptors_batch(&self.device, &raw_writes);
+        Ok(())
     }
 }

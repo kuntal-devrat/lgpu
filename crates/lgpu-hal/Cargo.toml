@@ -3,13 +3,15 @@ name = "lgpu-hal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Micro hardware abstraction layer for lgpu"
 
 [features]
 default = ["vulkan"]
 vulkan = ["dep:ash"]
-metal = []
-d3d12 = []
 
 [dependencies]
 ash = { workspace = true, optional = true }

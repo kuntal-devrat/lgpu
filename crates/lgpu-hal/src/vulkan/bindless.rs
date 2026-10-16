@@ -10,6 +10,7 @@ use std::sync::Mutex;
 pub const DEFAULT_MAX_STORAGE_BUFFERS: u32 = 16384;
 pub const DEFAULT_MAX_TEXTURES: u32 = 16384;
 pub const DEFAULT_MAX_SAMPLERS: u32 = 256;
+pub const DEFAULT_MAX_STORAGE_IMAGES: u32 = 16384;
 pub const PUSH_CONSTANT_SIZE: u32 = 128;
 
 pub struct VulkanBindlessHeap {
@@ -20,9 +21,11 @@ pub struct VulkanBindlessHeap {
     pub max_buffers: u32,
     pub max_textures: u32,
     pub max_samplers: u32,
+    pub max_storage_images: u32,
     buffer_slots: Mutex<SlotPool>,
     texture_slots: Mutex<SlotPool>,
     sampler_slots: Mutex<SlotPool>,
+    storage_image_slots: Mutex<SlotPool>,
 }
 
 struct SlotPool {
@@ -36,11 +39,13 @@ impl VulkanBindlessHeap {
         max_buffers: u32,
         max_textures: u32,
         max_samplers: u32,
+        max_storage_images: u32,
     ) -> Result<Self, HalError> {
         // 1. Descriptor Set Layout Bindings
         // Binding 0: Storage Buffers array
         // Binding 1: Sampled Images array
         // Binding 2: Samplers array
+        // Binding 3: Storage Images array (writeable)
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -57,9 +62,16 @@ impl VulkanBindlessHeap {
                 .descriptor_type(vk::DescriptorType::SAMPLER)
                 .descriptor_count(max_samplers)
                 .stage_flags(vk::ShaderStageFlags::ALL),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(max_storage_images)
+                .stage_flags(vk::ShaderStageFlags::ALL),
         ];
 
         let binding_flags = [
+            vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
             vk::DescriptorBindingFlags::PARTIALLY_BOUND
                 | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
             vk::DescriptorBindingFlags::PARTIALLY_BOUND
@@ -116,6 +128,9 @@ impl VulkanBindlessHeap {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::SAMPLER)
                 .descriptor_count(max_samplers),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(max_storage_images),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -152,6 +167,7 @@ impl VulkanBindlessHeap {
             max_buffers,
             max_textures,
             max_samplers,
+            max_storage_images,
             buffer_slots: Mutex::new(SlotPool {
                 free: Vec::new(),
                 next: 0,
@@ -161,6 +177,10 @@ impl VulkanBindlessHeap {
                 next: 0,
             }),
             sampler_slots: Mutex::new(SlotPool {
+                free: Vec::new(),
+                next: 0,
+            }),
+            storage_image_slots: Mutex::new(SlotPool {
                 free: Vec::new(),
                 next: 0,
             }),
@@ -286,6 +306,155 @@ impl VulkanBindlessHeap {
 
         unsafe {
             device.update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    pub fn allocate_storage_image_slot(&self) -> Result<u32, HalError> {
+        let mut pool = self.storage_image_slots.lock().unwrap();
+        if let Some(slot) = pool.free.pop() {
+            return Ok(slot);
+        }
+        if pool.next >= self.max_storage_images {
+            return Err(HalError::OutOfMemory(
+                "Exceeded max bindless storage image capacity".to_string(),
+            ));
+        }
+        let slot = pool.next;
+        pool.next += 1;
+        Ok(slot)
+    }
+
+    pub fn free_storage_image_slot(&self, slot: u32) {
+        let mut pool = self.storage_image_slots.lock().unwrap();
+        pool.free.push(slot);
+    }
+
+    pub fn write_storage_image_descriptor(
+        &self,
+        device: &ash::Device,
+        slot: u32,
+        image_view: vk::ImageView,
+        image_layout: vk::ImageLayout,
+    ) {
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(image_view)
+            .image_layout(image_layout);
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.descriptor_set)
+            .dst_binding(3)
+            .dst_array_element(slot)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(std::slice::from_ref(&image_info));
+
+        unsafe {
+            device.update_descriptor_sets(&[write], &[]);
+        }
+    }
+
+    pub fn write_buffer_descriptors_batch(
+        &self,
+        device: &ash::Device,
+        writes: &[(u32, vk::Buffer, u64)],
+    ) {
+        if writes.is_empty() {
+            return;
+        }
+        let buffer_infos: Vec<vk::DescriptorBufferInfo> = writes
+            .iter()
+            .map(|(_, buffer, size)| {
+                vk::DescriptorBufferInfo::default()
+                    .buffer(*buffer)
+                    .offset(0)
+                    .range(*size)
+            })
+            .collect();
+
+        let descriptor_writes: Vec<vk::WriteDescriptorSet> = writes
+            .iter()
+            .zip(buffer_infos.iter())
+            .map(|(&(slot, _, _), buffer_info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(0)
+                    .dst_array_element(slot)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(buffer_info))
+            })
+            .collect();
+
+        unsafe {
+            device.update_descriptor_sets(&descriptor_writes, &[]);
+        }
+    }
+
+    pub fn write_texture_descriptors_batch(
+        &self,
+        device: &ash::Device,
+        writes: &[(u32, vk::ImageView, vk::ImageLayout)],
+    ) {
+        if writes.is_empty() {
+            return;
+        }
+        let image_infos: Vec<vk::DescriptorImageInfo> = writes
+            .iter()
+            .map(|(_, view, layout)| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(*view)
+                    .image_layout(*layout)
+            })
+            .collect();
+
+        let descriptor_writes: Vec<vk::WriteDescriptorSet> = writes
+            .iter()
+            .zip(image_infos.iter())
+            .map(|(&(slot, _, _), image_info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(1)
+                    .dst_array_element(slot)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .image_info(std::slice::from_ref(image_info))
+            })
+            .collect();
+
+        unsafe {
+            device.update_descriptor_sets(&descriptor_writes, &[]);
+        }
+    }
+
+    pub fn write_storage_image_descriptors_batch(
+        &self,
+        device: &ash::Device,
+        writes: &[(u32, vk::ImageView, vk::ImageLayout)],
+    ) {
+        if writes.is_empty() {
+            return;
+        }
+        let image_infos: Vec<vk::DescriptorImageInfo> = writes
+            .iter()
+            .map(|(_, view, layout)| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(*view)
+                    .image_layout(*layout)
+            })
+            .collect();
+
+        let descriptor_writes: Vec<vk::WriteDescriptorSet> = writes
+            .iter()
+            .zip(image_infos.iter())
+            .map(|(&(slot, _, _), image_info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(3)
+                    .dst_array_element(slot)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .image_info(std::slice::from_ref(image_info))
+            })
+            .collect();
+
+        unsafe {
+            device.update_descriptor_sets(&descriptor_writes, &[]);
         }
     }
 

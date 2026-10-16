@@ -160,3 +160,52 @@ fn test_c_adapter_info_abi_stability() {
         lgpu_destroy_instance(instance);
     }
 }
+
+#[test]
+fn test_c_ffi_error_message_and_device_limits() {
+    unsafe {
+        let mut instance: *mut LgpuInstanceWrapper = ptr::null_mut();
+        assert_eq!(lgpu_create_instance(&mut instance), LgpuResult::Success);
+
+        // 1. Query device limits on valid adapter 0
+        let mut limits: LgpuDeviceLimits = std::mem::zeroed();
+        assert_eq!(
+            lgpu_adapter_get_limits(instance, 0, &mut limits),
+            LgpuResult::Success
+        );
+        assert!(limits.max_buffer_size > 0);
+        assert!(limits.max_texture_dimension_2d >= 1024);
+        assert!(limits.max_compute_workgroup_invocations >= 64);
+
+        // 2. Query limits on invalid adapter -> verify error code and diagnostic error message
+        assert_eq!(
+            lgpu_adapter_get_limits(instance, 9999, &mut limits),
+            LgpuResult::ErrorNoAdapter
+        );
+        let mut err_buf = [0 as std::ffi::c_char; 256];
+        let len = lgpu_get_last_error_message(err_buf.as_mut_ptr(), err_buf.len());
+        assert!(len > 0, "Error message must have length > 0");
+        let err_cstr = std::ffi::CStr::from_ptr(err_buf.as_ptr());
+        let err_str = err_cstr.to_str().expect("valid utf-8 error string");
+        assert!(
+            err_str.contains("out of bounds"),
+            "Expected 'out of bounds' in error message: {err_str}"
+        );
+
+        // 3. Null pointer safety -> verify error code and diagnostic error message
+        assert_eq!(
+            lgpu_create_buffer(ptr::null_mut(), 1024, 0, 0, ptr::null_mut()),
+            LgpuResult::ErrorGeneric
+        );
+        let len2 = lgpu_get_last_error_message(err_buf.as_mut_ptr(), err_buf.len());
+        assert!(len2 > 0);
+        let err_cstr2 = std::ffi::CStr::from_ptr(err_buf.as_ptr());
+        let err_str2 = err_cstr2.to_str().expect("valid utf-8 error string");
+        assert!(
+            err_str2.contains("Null pointer"),
+            "Expected 'Null pointer' in error message: {err_str2}"
+        );
+
+        lgpu_destroy_instance(instance);
+    }
+}

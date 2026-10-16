@@ -1,5 +1,6 @@
 //! C99 / Zig FFI exports for lgpu
 
+use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CString};
 use std::ptr::{self, NonNull};
 
@@ -8,6 +9,22 @@ use lgpu::{
     GraphicsPipeline, Instance, MemoryLocation, Sampler, SamplerDesc, Texture, TextureDesc,
     TextureFormat, TextureUsage,
 };
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn set_last_error(msg: impl Into<String>) {
+    LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = Some(msg.into());
+    });
+}
+
+pub(crate) fn clear_last_error() {
+    LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
 
 // Struct wrappers for raw pointers
 pub struct LgpuInstanceWrapper {
@@ -102,6 +119,20 @@ pub struct LgpuAdapterInfo {
     pub supports_timeline_semaphores: u8,
     pub supports_descriptor_indexing: u8,
     pub _padding: u8,
+    pub max_compute_workgroup_invocations: u32,
+    pub max_compute_workgroup_size: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LgpuDeviceLimits {
+    pub max_buffer_size: u64,
+    pub max_texture_dimension_1d: u32,
+    pub max_texture_dimension_2d: u32,
+    pub max_texture_dimension_3d: u32,
+    pub max_texture_array_layers: u32,
+    pub min_uniform_buffer_offset_alignment: u64,
+    pub min_storage_buffer_offset_alignment: u64,
     pub max_compute_workgroup_invocations: u32,
     pub max_compute_workgroup_size: [u32; 3],
 }
@@ -253,7 +284,87 @@ pub unsafe extern "C" fn lgpu_get_adapter_info(
     c_info.name[len] = 0;
 
     *out_info = c_info;
+    clear_last_error();
     LgpuResult::Success
+}
+
+/// Queries hardware device limits for a specific adapter.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `out_limits` must be a valid, aligned, writable pointer to `LgpuDeviceLimits`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_adapter_get_limits(
+    instance: *mut LgpuInstanceWrapper,
+    index: u32,
+    out_limits: *mut LgpuDeviceLimits,
+) -> LgpuResult {
+    if instance.is_null() || out_limits.is_null() {
+        set_last_error("Null pointer passed to lgpu_adapter_get_limits");
+        return LgpuResult::ErrorGeneric;
+    }
+
+    let wrapper = &*instance;
+    let adapters = match wrapper.instance.enumerate_adapters() {
+        Ok(a) => a,
+        Err(e) => {
+            set_last_error(format!("Failed to enumerate adapters: {e}"));
+            return LgpuResult::ErrorNoAdapter;
+        }
+    };
+
+    if (index as usize) >= adapters.len() {
+        set_last_error(format!(
+            "Adapter index {index} out of bounds (found {})",
+            adapters.len()
+        ));
+        return LgpuResult::ErrorNoAdapter;
+    }
+
+    let info = adapters[index as usize].info();
+    let l = info.limits;
+    *out_limits = LgpuDeviceLimits {
+        max_buffer_size: l.max_buffer_size,
+        max_texture_dimension_1d: l.max_texture_dimension_1d,
+        max_texture_dimension_2d: l.max_texture_dimension_2d,
+        max_texture_dimension_3d: l.max_texture_dimension_3d,
+        max_texture_array_layers: l.max_texture_array_layers,
+        min_uniform_buffer_offset_alignment: l.min_uniform_buffer_offset_alignment,
+        min_storage_buffer_offset_alignment: l.min_storage_buffer_offset_alignment,
+        max_compute_workgroup_invocations: l.max_compute_workgroup_invocations,
+        max_compute_workgroup_size: l.max_compute_workgroup_size,
+    };
+
+    clear_last_error();
+    LgpuResult::Success
+}
+
+/// Retrieves the last error message recorded on the calling thread.
+///
+/// # Safety
+///
+/// `out_buf` must point to a writable buffer of at least `max_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_get_last_error_message(
+    out_buf: *mut c_char,
+    max_len: usize,
+) -> usize {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    LAST_ERROR.with(|cell| {
+        if let Some(ref msg) = *cell.borrow() {
+            let bytes = msg.as_bytes();
+            let copy_len = bytes.len().min(max_len - 1);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf as *mut u8, copy_len);
+            *out_buf.add(copy_len) = 0;
+            copy_len
+        } else {
+            *out_buf = 0;
+            0
+        }
+    })
 }
 
 /// Requests a logical device and queue from the adapter at `adapter_index`.
@@ -270,16 +381,21 @@ pub unsafe extern "C" fn lgpu_create_device(
     out_queue: *mut *mut LgpuQueueWrapper,
 ) -> LgpuResult {
     if instance.is_null() || out_device.is_null() || out_queue.is_null() {
+        set_last_error("Null pointer passed to lgpu_create_device");
         return LgpuResult::ErrorGeneric;
     }
 
     let wrapper = &*instance;
     let adapters = match wrapper.instance.enumerate_adapters() {
         Ok(a) => a,
-        Err(_) => return LgpuResult::ErrorNoAdapter,
+        Err(e) => {
+            set_last_error(format!("Failed to enumerate adapters: {e}"));
+            return LgpuResult::ErrorNoAdapter;
+        }
     };
 
     if (adapter_index as usize) >= adapters.len() {
+        set_last_error(format!("Adapter index {adapter_index} out of bounds"));
         return LgpuResult::ErrorNoAdapter;
     }
 
@@ -287,9 +403,13 @@ pub unsafe extern "C" fn lgpu_create_device(
         Ok((device, queue)) => {
             *out_device = Box::into_raw(Box::new(LgpuDeviceWrapper { device }));
             *out_queue = Box::into_raw(Box::new(LgpuQueueWrapper { queue }));
+            clear_last_error();
             LgpuResult::Success
         }
-        Err(_) => LgpuResult::ErrorDeviceCreation,
+        Err(e) => {
+            set_last_error(format!("Failed to create device: {e}"));
+            LgpuResult::ErrorDeviceCreation
+        }
     }
 }
 
@@ -308,6 +428,7 @@ pub unsafe extern "C" fn lgpu_create_buffer(
     out_buffer: *mut *mut LgpuBufferWrapper,
 ) -> LgpuResult {
     if device.is_null() || out_buffer.is_null() {
+        set_last_error("Null pointer passed to lgpu_create_buffer");
         return LgpuResult::ErrorGeneric;
     }
 
@@ -328,9 +449,13 @@ pub unsafe extern "C" fn lgpu_create_buffer(
     match dev.device.create_buffer(&desc) {
         Ok(buffer) => {
             *out_buffer = Box::into_raw(Box::new(LgpuBufferWrapper { buffer }));
+            clear_last_error();
             LgpuResult::Success
         }
-        Err(_) => LgpuResult::ErrorBuffer,
+        Err(e) => {
+            set_last_error(format!("create_buffer failed: {e}"));
+            LgpuResult::ErrorBuffer
+        }
     }
 }
 
@@ -1944,6 +2069,40 @@ pub unsafe extern "C" fn lgpu_create_surface_from_win32(
     };
     let window_handle = raw_window_handle::RawWindowHandle::Win32(
         raw_window_handle::Win32WindowHandle::new(non_zero_hwnd),
+    );
+    match (*instance)
+        .instance
+        .create_surface_raw(display_handle, window_handle)
+    {
+        Ok(surface) => {
+            let wrapper = Box::new(LgpuSurfaceWrapper { surface });
+            *out_surface = Box::into_raw(wrapper);
+            LgpuResult::Success
+        }
+        Err(_) => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates a window surface from a macOS NSView or CAMetalLayer.
+///
+/// # Safety
+///
+/// `instance` must be a valid pointer obtained from `lgpu_create_instance`.
+/// `layer_or_view` must be a valid pointer to an NSView or CAMetalLayer.
+/// `out_surface` must be a valid, aligned, non-null pointer to a writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_surface_from_metal(
+    instance: *mut LgpuInstanceWrapper,
+    layer_or_view: *mut c_void,
+    out_surface: *mut *mut LgpuSurfaceWrapper,
+) -> LgpuResult {
+    if instance.is_null() || layer_or_view.is_null() || out_surface.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let display_handle =
+        raw_window_handle::RawDisplayHandle::AppKit(raw_window_handle::AppKitDisplayHandle::new());
+    let window_handle = raw_window_handle::RawWindowHandle::AppKit(
+        raw_window_handle::AppKitWindowHandle::new(NonNull::new_unchecked(layer_or_view)),
     );
     match (*instance)
         .instance

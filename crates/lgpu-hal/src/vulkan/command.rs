@@ -882,6 +882,271 @@ impl VulkanDevice {
         )
     }
 
+    pub fn cmd_draw_mrt(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        color_textures: &[&VulkanTexture],
+        depth_texture: Option<&VulkanTexture>,
+        pipeline: vk::Pipeline,
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+        push_constants: &[u8],
+        clear_color: [f32; 4],
+        clear_depth: Option<f32>,
+    ) -> Result<(), HalError> {
+        if color_textures.is_empty() {
+            return Err(HalError::InvalidParameter(
+                "color_textures cannot be empty for MRT".to_string(),
+            ));
+        }
+
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+
+        if push_constants.len() > bindless::PUSH_CONSTANT_SIZE as usize {
+            return Err(HalError::CommandError(format!(
+                "Push constants size {} exceeds maximum allowed size of {}",
+                push_constants.len(),
+                bindless::PUSH_CONSTANT_SIZE
+            )));
+        }
+
+        unsafe {
+            let mut barriers = Vec::with_capacity(color_textures.len() + 1);
+            let mut total_src_stage = vk::PipelineStageFlags::empty();
+            let mut wait_dst_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+            let mut color_subresources = Vec::with_capacity(color_textures.len());
+
+            for tex in color_textures {
+                let subresource = vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(tex.mip_levels.max(1))
+                    .base_array_layer(0)
+                    .layer_count(1);
+                color_subresources.push(subresource);
+
+                let old_layout = tex.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+                let (src_stage, src_access) = match old_layout {
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
+                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    ),
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::AccessFlags::TRANSFER_READ,
+                    ),
+                    _ => (
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::AccessFlags::empty(),
+                    ),
+                };
+
+                let barrier = vk::ImageMemoryBarrier::default()
+                    .old_layout(old_layout)
+                    .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(tex.image)
+                    .subresource_range(subresource)
+                    .src_access_mask(src_access)
+                    .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+
+                barriers.push(barrier);
+                total_src_stage |= src_stage;
+            }
+
+            let mut depth_attachment_val = None;
+            if let (Some(depth_tex), Some(depth_val)) = (depth_texture, clear_depth) {
+                let depth_subresource = vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1);
+
+                let old_depth_layout =
+                    depth_tex.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
+                let (depth_src_stage, depth_src_access) = match old_depth_layout {
+                    vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
+                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    ),
+                    _ => (
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::AccessFlags::empty(),
+                    ),
+                };
+
+                let depth_barrier = vk::ImageMemoryBarrier::default()
+                    .old_layout(old_depth_layout)
+                    .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(depth_tex.image)
+                    .subresource_range(depth_subresource)
+                    .src_access_mask(depth_src_access)
+                    .dst_access_mask(
+                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    );
+
+                barriers.push(depth_barrier);
+                total_src_stage |= depth_src_stage;
+                wait_dst_stage |= vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
+
+                let depth_attachment = vk::RenderingAttachmentInfo::default()
+                    .image_view(depth_tex.view)
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: depth_val,
+                            stencil: 0,
+                        },
+                    });
+                depth_attachment_val = Some(depth_attachment);
+            }
+
+            self.device.cmd_pipeline_barrier(
+                recorder.command_buffer,
+                total_src_stage,
+                wait_dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barriers,
+            );
+
+            let clear_value = vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: clear_color,
+                },
+            };
+
+            let attachments: Vec<vk::RenderingAttachmentInfo> = color_textures
+                .iter()
+                .map(|tex| {
+                    vk::RenderingAttachmentInfo::default()
+                        .image_view(tex.view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .clear_value(clear_value)
+                })
+                .collect();
+
+            let first_tex = color_textures[0];
+            let render_area = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: first_tex.width,
+                    height: first_tex.height,
+                },
+            };
+
+            let mut rendering_info = vk::RenderingInfo::default()
+                .render_area(render_area)
+                .layer_count(1)
+                .color_attachments(&attachments);
+
+            if let Some(ref da) = depth_attachment_val {
+                rendering_info = rendering_info.depth_attachment(da);
+            }
+
+            self.device
+                .cmd_begin_rendering(recorder.command_buffer, &rendering_info);
+
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: first_tex.width as f32,
+                height: first_tex.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            self.device
+                .cmd_set_viewport(recorder.command_buffer, 0, &[viewport]);
+            self.device
+                .cmd_set_scissor(recorder.command_buffer, 0, &[render_area]);
+
+            self.device.cmd_bind_pipeline(
+                recorder.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline,
+            );
+            self.device.cmd_bind_descriptor_sets(
+                recorder.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                heap.pipeline_layout,
+                0,
+                &[heap.descriptor_set],
+                &[],
+            );
+
+            if !push_constants.is_empty() {
+                let mut aligned_pc = [0u8; bindless::PUSH_CONSTANT_SIZE as usize];
+                aligned_pc[..push_constants.len()].copy_from_slice(push_constants);
+                let aligned_len = ((push_constants.len() + 3) / 4) * 4;
+
+                self.device.cmd_push_constants(
+                    recorder.command_buffer,
+                    heap.pipeline_layout,
+                    vk::ShaderStageFlags::ALL,
+                    0,
+                    &aligned_pc[..aligned_len],
+                );
+            }
+
+            self.device.cmd_draw(
+                recorder.command_buffer,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+            );
+
+            self.device.cmd_end_rendering(recorder.command_buffer);
+
+            let post_barriers: Vec<vk::ImageMemoryBarrier> = color_textures
+                .iter()
+                .zip(color_subresources.iter())
+                .map(|(tex, &subres)| {
+                    vk::ImageMemoryBarrier::default()
+                        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(tex.image)
+                        .subresource_range(subres)
+                        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                        .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                })
+                .collect();
+
+            self.device.cmd_pipeline_barrier(
+                recorder.command_buffer,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &post_barriers,
+            );
+
+            for tex in color_textures {
+                tex.transition_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+            }
+        }
+        Ok(())
+    }
+
     pub fn cmd_draw_indexed(
         &self,
         recorder: &VulkanCommandRecorder,
@@ -1388,10 +1653,27 @@ impl VulkanDevice {
                 self.fence_cache.lock().unwrap().push(f);
                 wait_res.map_err(|e| HalError::CommandError(e.to_string()))?;
 
+                // Acquire locks in standard order: pending_async_recorders THEN command_recorder_cache
+                let current_val = self
+                    .device
+                    .get_semaphore_counter_value(self.internal_frame_semaphore)
+                    .unwrap_or(0);
+                let mut pending = self.pending_async_recorders.lock().unwrap();
                 let mut cache = self.command_recorder_cache.lock().unwrap();
                 for r in recorders {
                     cache.push((r.command_pool, r.command_buffer));
                 }
+
+                pending.retain_mut(|(val, async_recorders)| {
+                    if *val <= current_val {
+                        for r in async_recorders.drain(..) {
+                            cache.push((r.command_pool, r.command_buffer));
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
             } else {
                 self.pending_async_recorders
                     .lock()

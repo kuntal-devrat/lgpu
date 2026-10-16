@@ -270,7 +270,8 @@ impl VulkanDevice {
                 vk::AccessFlags2::TRANSFER_READ,
             ),
             _ => (
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags2::TRANSFER,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags2::TRANSFER,
                 vk::AccessFlags2::COLOR_ATTACHMENT_WRITE | vk::AccessFlags2::TRANSFER_READ,
             ),
         };

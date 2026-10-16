@@ -1,15 +1,11 @@
 //! # lgpu-hal
 //!
 //! Micro Hardware Abstraction Layer for `lgpu`.
-//! Provides zero-overhead, dynamic-loading access to Vulkan 1.2+, Metal 3, and DirectX 12.
+//! Provides zero-overhead, dynamic-loading access to Vulkan 1.3+.
 
 #![allow(clippy::all)]
 
 pub mod backend;
-#[cfg(feature = "d3d12")]
-pub mod d3d12;
-#[cfg(feature = "metal")]
-pub mod metal;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 pub use backend::*;
@@ -30,6 +26,35 @@ pub enum DeviceType {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceLimits {
+    pub max_buffer_size: u64,
+    pub max_texture_dimension_1d: u32,
+    pub max_texture_dimension_2d: u32,
+    pub max_texture_dimension_3d: u32,
+    pub max_texture_array_layers: u32,
+    pub min_uniform_buffer_offset_alignment: u64,
+    pub min_storage_buffer_offset_alignment: u64,
+    pub max_compute_workgroup_invocations: u32,
+    pub max_compute_workgroup_size: [u32; 3],
+}
+
+impl Default for DeviceLimits {
+    fn default() -> Self {
+        Self {
+            max_buffer_size: 256 * 1024 * 1024,
+            max_texture_dimension_1d: 8192,
+            max_texture_dimension_2d: 8192,
+            max_texture_dimension_3d: 2048,
+            max_texture_array_layers: 2048,
+            min_uniform_buffer_offset_alignment: 256,
+            min_storage_buffer_offset_alignment: 64,
+            max_compute_workgroup_invocations: 1024,
+            max_compute_workgroup_size: [1024, 1024, 64],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdapterInfo {
     pub name: String,
@@ -42,6 +67,7 @@ pub struct AdapterInfo {
     pub supports_descriptor_indexing: bool,
     pub max_compute_workgroup_invocations: u32,
     pub max_compute_workgroup_size: [u32; 3],
+    pub limits: DeviceLimits,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

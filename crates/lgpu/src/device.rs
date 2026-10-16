@@ -9,12 +9,10 @@ use crate::{
 use std::sync::Arc;
 
 pub struct Device {
-    #[cfg(feature = "vulkan")]
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
 }
 
 pub struct Queue {
-    #[cfg(feature = "vulkan")]
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
 }
 
@@ -37,24 +35,21 @@ impl Device {
     /// # }
     /// ```
     pub fn create_buffer(&self, desc: &BufferDesc) -> Result<Buffer, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let hal_buffer = self.vulkan_device.create_buffer(desc)?;
-            let id = if self.vulkan_device.bindless_heap.is_some() {
-                Some(BufferId(
-                    self.vulkan_device.register_bindless_buffer(&hal_buffer)?,
-                ))
-            } else {
-                None
-            };
+        let hal_buffer = self.vulkan_device.create_buffer(desc)?;
+        let id = if self.vulkan_device.bindless_heap.is_some() {
+            Some(BufferId(
+                self.vulkan_device.register_bindless_buffer(&hal_buffer)?,
+            ))
+        } else {
+            None
+        };
 
-            Ok(Buffer {
-                hal_buffer: Some(hal_buffer),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-                size: desc.size,
-                id,
-            })
-        }
+        Ok(Buffer {
+            hal_buffer: Some(hal_buffer),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            size: desc.size,
+            id,
+        })
     }
 
     /// Creates a host-mapped GPU [`Buffer`] initialized with the provided byte slice.
@@ -108,14 +103,11 @@ impl Device {
     }
 
     pub fn create_shader_spirv(&self, spirv_words: &[u32]) -> Result<Shader, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let hal_shader = self.vulkan_device.create_shader_from_spirv(spirv_words)?;
-            Ok(Shader {
-                hal_shader: Some(hal_shader),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
+        let hal_shader = self.vulkan_device.create_shader_from_spirv(spirv_words)?;
+        Ok(Shader {
+            hal_shader: Some(hal_shader),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     pub fn create_compute_pipeline(
@@ -123,34 +115,36 @@ impl Device {
         shader: &Shader,
         buffer_count: u32,
     ) -> Result<ComputePipeline, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_shader = shader.hal_shader.as_ref().unwrap();
-            let hal_pipeline = self
-                .vulkan_device
-                .create_compute_pipeline(raw_shader, buffer_count)?;
-            Ok(ComputePipeline {
-                hal_pipeline: Some(hal_pipeline),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
+        let raw_shader = shader.hal_shader.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Shader hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        let hal_pipeline = self
+            .vulkan_device
+            .create_compute_pipeline(raw_shader, buffer_count)?;
+        Ok(ComputePipeline {
+            hal_pipeline: Some(hal_pipeline),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     pub fn create_bindless_compute_pipeline(
         &self,
         shader: &Shader,
     ) -> Result<BindlessComputePipeline, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_shader = shader.hal_shader.as_ref().unwrap();
-            let pipeline = self
-                .vulkan_device
-                .create_bindless_compute_pipeline(raw_shader)?;
-            Ok(BindlessComputePipeline {
-                pipeline: Some(pipeline),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
+        let raw_shader = shader.hal_shader.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Shader hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        let pipeline = self
+            .vulkan_device
+            .create_bindless_compute_pipeline(raw_shader)?;
+        Ok(BindlessComputePipeline {
+            pipeline: Some(pipeline),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     /// Creates a GPU [`Texture`] according to [`TextureDesc`].
@@ -171,52 +165,67 @@ impl Device {
     /// # }
     /// ```
     pub fn create_texture(&self, desc: &TextureDesc) -> Result<Texture, Error> {
-        #[cfg(feature = "vulkan")]
+        let hal_texture = self.vulkan_device.create_texture(desc)?;
+        let id = if desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+            && self.vulkan_device.bindless_heap.is_some()
         {
-            let hal_texture = self.vulkan_device.create_texture(desc)?;
-            let id = if desc.usage.contains(TextureUsage::TEXTURE_BINDING)
-                && self.vulkan_device.bindless_heap.is_some()
-            {
-                Some(TextureId(
-                    self.vulkan_device.register_bindless_texture(&hal_texture)?,
-                ))
-            } else {
-                None
-            };
-            Ok(Texture {
-                hal_texture: Some(hal_texture),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-                width: desc.width,
-                height: desc.height,
-                format: desc.format,
-                id,
-                owned: true,
-            })
-        }
+            Some(TextureId(
+                self.vulkan_device.register_bindless_texture(&hal_texture)?,
+            ))
+        } else {
+            None
+        };
+        let storage_id = if desc.usage.contains(TextureUsage::STORAGE_BINDING)
+            && self.vulkan_device.bindless_heap.is_some()
+        {
+            Some(TextureId(
+                self.vulkan_device
+                    .register_bindless_storage_image(&hal_texture)?,
+            ))
+        } else {
+            None
+        };
+        Ok(Texture {
+            hal_texture: Some(hal_texture),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+            id,
+            storage_id,
+            owned: true,
+        })
     }
 
     pub fn create_sampler(&self, desc: &SamplerDesc) -> Result<Sampler, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let hal_sampler = self.vulkan_device.create_sampler(desc)?;
-            let id = if self.vulkan_device.bindless_heap.is_some() {
-                Some(SamplerId(
-                    self.vulkan_device.register_bindless_sampler(&hal_sampler)?,
+        let hal_sampler = self.vulkan_device.create_sampler(desc)?;
+        let id = if self.vulkan_device.bindless_heap.is_some() {
+            Some(SamplerId(
+                self.vulkan_device.register_bindless_sampler(&hal_sampler)?,
+            ))
+        } else {
+            None
+        };
+        Ok(Sampler {
+            hal_sampler: Some(hal_sampler),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            id,
+        })
+    }
+
+    /// Performs a batched update of bindless buffer descriptors in a single driver call.
+    pub fn write_buffer_descriptors_batch(&self, writes: &[(u32, &Buffer)]) -> Result<(), Error> {
+        let mut raw = Vec::with_capacity(writes.len());
+        for (slot, buf) in writes {
+            let hal_buf = buf.hal_buffer.as_ref().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "Buffer hal resource is missing or destroyed".to_string(),
                 ))
-            } else {
-                None
-            };
-            Ok(Sampler {
-                hal_sampler: Some(hal_sampler),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-                id,
-            })
+            })?;
+            raw.push((*slot, hal_buf));
         }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = desc;
-            Err(HalError::NoAdapterFound.into())
-        }
+        self.vulkan_device.write_buffer_descriptors_batch(&raw)?;
+        Ok(())
     }
 
     pub fn create_graphics_pipeline(
@@ -247,36 +256,24 @@ impl Device {
         depth_test: bool,
         depth_write: bool,
     ) -> Result<GraphicsPipeline, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_shader = shader.hal_shader.as_ref().unwrap();
-            let pipeline = self.vulkan_device.create_graphics_pipeline_with_depth(
-                raw_shader,
-                vs_entry,
-                fs_entry,
-                color_format,
-                depth_format,
-                depth_test,
-                depth_write,
-            )?;
-            Ok(GraphicsPipeline {
-                pipeline: Some(pipeline),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (
-                shader,
-                vs_entry,
-                fs_entry,
-                color_format,
-                depth_format,
-                depth_test,
-                depth_write,
-            );
-            Err(HalError::NoAdapterFound.into())
-        }
+        let raw_shader = shader.hal_shader.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Shader hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        let pipeline = self.vulkan_device.create_graphics_pipeline_with_depth(
+            raw_shader,
+            vs_entry,
+            fs_entry,
+            color_format,
+            depth_format,
+            depth_test,
+            depth_write,
+        )?;
+        Ok(GraphicsPipeline {
+            pipeline: Some(pipeline),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     pub fn create_graphics_pipeline_with_desc(
@@ -284,22 +281,18 @@ impl Device {
         shader: &Shader,
         desc: &lgpu_hal::GraphicsPipelineDesc,
     ) -> Result<GraphicsPipeline, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_shader = shader.hal_shader.as_ref().unwrap();
-            let pipeline = self
-                .vulkan_device
-                .create_graphics_pipeline_with_desc(raw_shader, desc)?;
-            Ok(GraphicsPipeline {
-                pipeline: Some(pipeline),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (shader, desc);
-            Err(HalError::NoAdapterFound.into())
-        }
+        let raw_shader = shader.hal_shader.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Shader hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        let pipeline = self
+            .vulkan_device
+            .create_graphics_pipeline_with_desc(raw_shader, desc)?;
+        Ok(GraphicsPipeline {
+            pipeline: Some(pipeline),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     /// Creates a new [`CommandEncoder`] for recording graphics and compute commands.
@@ -316,61 +309,39 @@ impl Device {
     /// # }
     /// ```
     pub fn create_command_encoder(&self) -> Result<CommandEncoder, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let recorder = self.vulkan_device.create_command_recorder()?;
-            Ok(CommandEncoder {
-                recorder: Some(recorder),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
+        let recorder = self.vulkan_device.create_command_recorder()?;
+        Ok(CommandEncoder {
+            recorder: Some(recorder),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     pub fn create_timeline_semaphore(
         &self,
         initial_value: u64,
     ) -> Result<TimelineSemaphore, Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let hal_semaphore = self
-                .vulkan_device
-                .create_timeline_semaphore(initial_value)?;
-            Ok(TimelineSemaphore {
-                hal_semaphore: Some(hal_semaphore),
-                vulkan_device: Arc::clone(&self.vulkan_device),
-            })
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = initial_value;
-            Err(HalError::NoAdapterFound.into())
-        }
+        let hal_semaphore = self
+            .vulkan_device
+            .create_timeline_semaphore(initial_value)?;
+        Ok(TimelineSemaphore {
+            hal_semaphore: Some(hal_semaphore),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+        })
     }
 
     pub fn wait_idle(&self) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            self.vulkan_device.wait_idle()?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            Ok(())
-        }
+        self.vulkan_device.wait_idle()?;
+        Ok(())
     }
 
     pub fn write_texture(&self, texture: &Texture, data: &[u8]) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.write_texture(raw_tex, data)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (texture, data);
-            Ok(())
-        }
+        let raw_tex = texture.hal_texture.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Texture hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.write_texture(raw_tex, data)?;
+        Ok(())
     }
 }
 
@@ -387,58 +358,41 @@ impl Queue {
     /// # }
     /// ```
     pub fn submit(&self, command_buffer: CommandBuffer) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            self.vulkan_device
-                .submit_and_wait(command_buffer.recorder)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = command_buffer;
-            Ok(())
-        }
+        self.vulkan_device
+            .submit_and_wait(command_buffer.recorder)?;
+        Ok(())
     }
 
+    /// Submits command buffer work targeted to a swapchain surface without presenting.
+    /// The acquired surface can then be presented explicitly via [`SurfaceTexture::present`].
+    pub fn submit_surface_work(
+        &self,
+        command_buffer: CommandBuffer,
+        surface_texture: &SurfaceTexture,
+    ) -> Result<(), Error> {
+        self.vulkan_device.submit_for_surface(
+            command_buffer.recorder,
+            surface_texture.acquire_semaphore,
+            surface_texture.render_semaphore,
+            surface_texture.frame_fence,
+        )?;
+        Ok(())
+    }
+
+    /// Submits command buffer work targeted to a swapchain surface and immediately queues presentation.
     pub fn submit_surface(
         &self,
         command_buffer: CommandBuffer,
         surface_texture: SurfaceTexture,
     ) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            self.vulkan_device.submit_for_surface(
-                command_buffer.recorder,
-                surface_texture.acquire_semaphore,
-                surface_texture.render_semaphore,
-                surface_texture.frame_fence,
-            )?;
-            self.vulkan_device.queue_present_raw(
-                surface_texture.swapchain,
-                surface_texture.image_index,
-                &[surface_texture.render_semaphore],
-            )?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (command_buffer, surface_texture);
-            Ok(())
-        }
+        self.submit_surface_work(command_buffer, &surface_texture)?;
+        surface_texture.present(self)
     }
 
     pub fn submit_batches(&self, command_buffers: Vec<CommandBuffer>) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
-            self.vulkan_device.submit_batches_and_wait(recorders)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = command_buffers;
-            Ok(())
-        }
+        let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
+        self.vulkan_device.submit_batches_and_wait(recorders)?;
+        Ok(())
     }
 
     pub fn submit_async(
@@ -456,41 +410,38 @@ impl Queue {
         wait_semaphores: &[(&TimelineSemaphore, u64)],
         signal_semaphores: &[(&TimelineSemaphore, u64)],
     ) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
-            let raw_wait: Vec<(&lgpu_hal::vulkan::VulkanTimelineSemaphore, u64)> = wait_semaphores
-                .iter()
-                .map(|(s, v)| (s.hal_semaphore.as_ref().unwrap(), *v))
-                .collect();
-            let raw_signal: Vec<(&lgpu_hal::vulkan::VulkanTimelineSemaphore, u64)> =
-                signal_semaphores
-                    .iter()
-                    .map(|(s, v)| (s.hal_semaphore.as_ref().unwrap(), *v))
-                    .collect();
-            self.vulkan_device
-                .submit_batches_async(recorders, &raw_wait, &raw_signal)?;
-            Ok(())
+        let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
+        let mut raw_wait = Vec::with_capacity(wait_semaphores.len());
+        for (s, v) in wait_semaphores {
+            let sem = s.hal_semaphore.as_ref().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "Wait semaphore is missing or destroyed".to_string(),
+                ))
+            })?;
+            raw_wait.push((sem, *v));
         }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (command_buffers, wait_semaphores, signal_semaphores);
-            Ok(())
+        let mut raw_signal = Vec::with_capacity(signal_semaphores.len());
+        for (s, v) in signal_semaphores {
+            let sem = s.hal_semaphore.as_ref().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "Signal semaphore is missing or destroyed".to_string(),
+                ))
+            })?;
+            raw_signal.push((sem, *v));
         }
+        self.vulkan_device
+            .submit_batches_async(recorders, &raw_wait, &raw_signal)?;
+        Ok(())
     }
 
     pub fn write_texture(&self, texture: &Texture, data: &[u8]) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_tex = texture.hal_texture.as_ref().unwrap();
-            self.vulkan_device.write_texture(raw_tex, data)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (texture, data);
-            Ok(())
-        }
+        let raw_tex = texture.hal_texture.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Texture hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.write_texture(raw_tex, data)?;
+        Ok(())
     }
 
     /// Writes byte data into a host-mapped [`Buffer`] at the specified offset.

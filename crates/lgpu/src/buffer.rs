@@ -7,9 +7,7 @@ use std::sync::Arc;
 pub struct BufferId(pub u32);
 
 pub struct Buffer {
-    #[cfg(feature = "vulkan")]
     pub(crate) hal_buffer: Option<lgpu_hal::vulkan::VulkanBuffer>,
-    #[cfg(feature = "vulkan")]
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
     pub size: u64,
     pub id: Option<BufferId>,
@@ -57,17 +55,13 @@ impl Buffer {
     /// # }
     /// ```
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_buf = self.hal_buffer.as_ref().unwrap();
-            self.vulkan_device.write_buffer(raw_buf, offset, data)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (offset, data);
-            Ok(())
-        }
+        let raw_buf = self.hal_buffer.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Buffer hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.write_buffer(raw_buf, offset, data)?;
+        Ok(())
     }
 
     /// Reads data from the beginning of the buffer into a destination slice.
@@ -99,30 +93,23 @@ impl Buffer {
     /// # }
     /// ```
     pub fn read_at(&self, offset: u64, data: &mut [u8]) -> Result<(), Error> {
-        #[cfg(feature = "vulkan")]
-        {
-            let raw_buf = self.hal_buffer.as_ref().unwrap();
-            self.vulkan_device.read_buffer(raw_buf, offset, data)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = (offset, data);
-            Ok(())
-        }
+        let raw_buf = self.hal_buffer.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Buffer hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.read_buffer(raw_buf, offset, data)?;
+        Ok(())
     }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        #[cfg(feature = "vulkan")]
-        {
-            if let Some(buf_id) = self.id {
-                self.vulkan_device.unregister_bindless_buffer(buf_id.0);
-            }
-            if let Some(buf) = self.hal_buffer.take() {
-                self.vulkan_device.destroy_buffer(buf);
-            }
+        if let Some(buf_id) = self.id {
+            self.vulkan_device.unregister_bindless_buffer(buf_id.0);
+        }
+        if let Some(buf) = self.hal_buffer.take() {
+            self.vulkan_device.destroy_buffer(buf);
         }
     }
 }
