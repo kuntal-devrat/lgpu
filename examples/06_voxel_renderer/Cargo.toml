@@ -1,0 +1,14 @@
+[package]
+publish = false
+name = "example-voxel-renderer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Real-time voxel raymarching engine using modern Vulkan 1.3 dynamic rendering and lgpu"
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
+winit = { version = "0.29", default-features = false, features = ["rwh_06", "x11", "wayland"] }
+bytemuck = { version = "1.19", features = ["derive"] }
+naga = { version = "25.0", features = ["wgsl-in", "spv-out"] }

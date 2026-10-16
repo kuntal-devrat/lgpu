@@ -9,6 +9,7 @@ members = [
     "examples/03_bindless_triangle",
     "examples/04_bindless_100k",
     "examples/05_window_shader",
+    "examples/06_voxel_renderer",
 ]
 
 [workspace.package]

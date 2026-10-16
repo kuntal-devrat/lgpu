@@ -167,6 +167,9 @@ cargo run -p example-bindless-100k
 
 # Interactive window with 3D torus raymarched shader
 cargo run --release -p example-window-shader
+
+# Real-time voxel raymarching DDA engine (highlands, islands, citadel)
+cargo run --release -p example-voxel-renderer
 ```
 
 ---
