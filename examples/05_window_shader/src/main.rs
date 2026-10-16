@@ -158,8 +158,7 @@ impl RenderState {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
-    println!("      lgpu: Modern Cross-Platform Ultra-Fast GPU Engine      ");
-    println!("   Live Window Demo: 3D Polygons & Real-Time Shaders       ");
+    println!("   lgpu: Window Example (3D Polygons & Real-Time Shaders)   ");
     println!("============================================================");
 
     // 1. Initialize Vulkan 1.3 Device via lgpu

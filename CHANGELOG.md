@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2026-10-16
 
 ### Changed
-- Cleaned and organized integration test suite names and removed audit prompt markers.
+- Cleaned and organized integration test suite names.
 - Streamlined documentation comments across `Buffer` and memory suballocator.
 - Updated documentation and README to clearly specify project scope and transparently describe AI-assisted boilerplate scaffolding.
 

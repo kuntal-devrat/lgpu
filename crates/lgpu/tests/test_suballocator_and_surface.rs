@@ -37,7 +37,7 @@ fn test_suballocator_free_size_coalescing() {
     // Drop all buffers - every chunk should be freed with its true allocated_size
     drop(buffers);
 
-    // Verify subsequent allocation succeeds seamlessly from coalesced chunks
+    // Verify subsequent allocation succeeds from coalesced chunks
     let large_desc = BufferDesc {
         label: Some("CoalescedBuffer"),
         size: 73 * 100,
@@ -98,7 +98,7 @@ fn test_linear_vs_optimal_block_separation() {
         let _ = i;
     }
 
-    // Dropping and reallocating should work seamlessly without memory corruption
+    // Dropping and reallocating should succeed cleanly
     drop(buffers);
     drop(textures);
 }

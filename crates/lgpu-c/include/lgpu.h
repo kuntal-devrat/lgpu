@@ -2,7 +2,7 @@
  * @file lgpu.h
  * @brief Universal C99 / C++ / Zig / Odin header for lgpu (Lean GPU).
  * 
- * An ultra-lightweight, bindless-first cross-platform GPU abstraction.
+ * Lightweight, bindless-first Vulkan 1.3 wrapper for C99, C++, and Zig.
  */
 
 #ifndef LGPU_H
