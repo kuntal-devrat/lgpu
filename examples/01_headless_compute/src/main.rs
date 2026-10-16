@@ -1,6 +1,6 @@
 //! Headless GPGPU compute example with lgpu
 //!
-//! Dispatches a vector-addition compute kernel (C[i] = A[i] + B[i]) on the GPU
+//! Dispatches a vector-addition compute kernel (`C[i] = A[i] + B[i]`) on the GPU
 //! without any window or display server, and reads back the computed results.
 
 use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation};
