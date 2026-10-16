@@ -119,6 +119,15 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Vulkan SDK & Lavapipe
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 'latest'
+          install_runtime: true
+          install_lavapipe: true
+          stripdown: true
+          cache: true
+
       - name: Check Workspace
         run: cargo check --workspace --all-targets
 
@@ -129,7 +138,7 @@ jobs:
           cargo build -p lgpu-c --verbose
 
       - name: Run Workspace Tests
-        run: cargo test --workspace --no-fail-fast || true
+        run: cargo test --workspace --no-fail-fast
 
   test-macos:
     name: Build & Test (macOS)
@@ -144,6 +153,12 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install MoltenVK & Vulkan Loader
+        run: |
+          brew install molten-vk vulkan-loader
+          echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib" >> $GITHUB_ENV
+
       - name: Check Workspace
         run: cargo check --workspace --all-targets
 
@@ -154,7 +169,7 @@ jobs:
           cargo build -p lgpu-c --verbose
 
       - name: Run Workspace Tests
-        run: cargo test --workspace --no-fail-fast || true
+        run: cargo test --workspace --no-fail-fast
 
   docs:
     name: Documentation Build
