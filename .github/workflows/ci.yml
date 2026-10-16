@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -47,7 +46,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Verify Lints (cargo clippy)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test-linux:
     name: Test (Ubuntu Linux)
@@ -185,3 +184,31 @@ jobs:
 
       - name: Build Docs
         run: cargo doc --workspace --no-deps
+
+  package-verify:
+    name: Package & Publish Dry Run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev pkg-config
+
+      - name: Test Crate Packaging (dry-run)
+        run: |
+          echo "Testing lgpu-hal packaging..."
+          cargo publish -p lgpu-hal --dry-run
+          echo "Testing lgpu packaging..."
+          cargo publish -p lgpu --dry-run
+          echo "Testing lgpu-c packaging..."
+          cargo publish -p lgpu-c --dry-run
+
