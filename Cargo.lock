@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "example-bindless-100k"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "lgpu",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "example-bindless-triangle"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "lgpu",
@@ -308,14 +308,14 @@ dependencies = [
 
 [[package]]
 name = "example-clear-screen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lgpu",
 ]
 
 [[package]]
 name = "example-headless-compute"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "lgpu",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "example-window-shader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "lgpu",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "lgpu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "lgpu-hal",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "lgpu-c"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lgpu",
  "raw-window-handle",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "lgpu-hal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ash",
  "bitflags 2.13.2",
