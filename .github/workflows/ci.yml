@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lints:
+    name: Formatting & Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            pkg-config
+
+      - name: Verify Formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Verify Lints (cargo clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test-linux:
+    name: Test (Ubuntu Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies (Vulkan, Lavapipe, X11, Wayland)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            pkg-config
+
+      - name: Configure Vulkan ICD (Lavapipe)
+        run: |
+          ls -la /usr/share/vulkan/icd.d/ || true
+          if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> $GITHUB_ENV
+          elif [ -f /usr/share/vulkan/icd.d/lvp_icd.json ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> $GITHUB_ENV
+          fi
+
+      - name: Verify Vulkan Environment
+        run: |
+          vulkaninfo --summary || true
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Run Integration Tests
+        run: cargo test --all --verbose
+
+      - name: Run Documentation Tests
+        run: cargo test --doc --verbose
+
+      - name: Build & Run C99 Example
+        run: |
+          cargo build -p lgpu-c
+          gcc -std=c99 examples/c_example/main.c -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o c_example
+          ./c_example
+
+  test-windows:
+    name: Build & Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Vulkan SDK & Lavapipe
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 'latest'
+          install_runtime: true
+          install_lavapipe: true
+          stripdown: true
+          cache: true
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Build Core Crates & C Library
+        run: |
+          cargo build -p lgpu-hal --verbose
+          cargo build -p lgpu --verbose
+          cargo build -p lgpu-c --verbose
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace
+
+  test-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install MoltenVK & Vulkan Loader
+        run: |
+          brew install molten-vk vulkan-loader
+          echo "VK_ICD_FILENAMES=$(brew --prefix)/share/vulkan/icd.d/MoltenVK_icd.json" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib" >> $GITHUB_ENV
+
+      - name: Check Workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Build Core Crates, C Library & Examples
+        run: cargo build --workspace --verbose
+
+  docs:
+    name: Documentation Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev libwayland-dev libxkbcommon-dev libx11-dev pkg-config
+
+      - name: Build Docs
+        run: cargo doc --workspace --no-deps

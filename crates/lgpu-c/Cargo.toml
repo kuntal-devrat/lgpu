@@ -1,0 +1,17 @@
+[package]
+name = "lgpu-c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Universal C99 / Zig FFI bindings for lgpu"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+lgpu = { path = "../lgpu", version = "0.1.2" }
+raw-window-handle = { workspace = true }

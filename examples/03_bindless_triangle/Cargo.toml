@@ -1,0 +1,10 @@
+[package]
+publish = false
+name = "example-bindless-triangle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
+bytemuck = { workspace = true }

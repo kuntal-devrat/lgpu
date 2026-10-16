@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lgpu-hal",
+    "crates/lgpu",
+    "crates/lgpu-c",
+    "examples/01_headless_compute",
+    "examples/02_clear_screen",
+    "examples/03_bindless_triangle",
+    "examples/04_bindless_100k",
+    "examples/05_window_shader",
+]
+
+[workspace.package]
+version = "0.1.2"
+edition = "2021"
+authors = ["lgpu contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kuntal-devrat/lgpu"
+homepage = "https://github.com/kuntal-devrat/lgpu"
+documentation = "https://docs.rs/lgpu"
+readme = "README.md"
+keywords = ["gpu", "vulkan", "bindless", "graphics", "compute"]
+categories = ["rendering::graphics-api", "game-development"]
+description = "Ultra-lightweight, bindless-first cross-platform GPU abstraction"
+
+[workspace.dependencies]
+ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
+bitflags = "2.8"
+thiserror = "2"
+raw-window-handle = "0.6"
+bytemuck = { version = "1.19", features = ["derive"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
