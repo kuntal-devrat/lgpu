@@ -6,24 +6,35 @@ This document outlines the architectural philosophy, safety invariants, synchron
 
 ## 1. Ecosystem Positioning: How `lgpu` Compares
 
-Developers often ask how `lgpu` relates to existing graphics layers in the Rust ecosystem like **`wgpu`** and **`vulkano`**:
+Developers often ask how `lgpu` relates to existing graphics layers in the Rust ecosystem like **`wgpu`**, **`vulkano`**, and **`kvark/blade`**:
 
-| Dimension | `wgpu` | `vulkano` | `lgpu` |
-| :--- | :--- | :--- | :--- |
-| **API Target** | WebGPU Specification | Vulkan 1.0 – 1.2+ | **Vulkan 1.3+ Native** |
-| **Backends** | Vulkan, Metal, D3D12, WebGL, WebGPU | Vulkan only | **Vulkan 1.3 only** (via native drivers / MoltenVK) |
-| **Shader Model** | WGSL (runtime translation to SPIR-V/MSL/HLSL via Naga) | Offline or macro-compiled SPIR-V | **Native SPIR-V** (runtime WGSL optional via Naga) |
-| **Render Pass Model** | RenderPass objects (`wgpu::RenderPass`) | RenderPass state objects (`vulkano::render_pass`) | **Dynamic Rendering only** (`VK_KHR_dynamic_rendering`) |
-| **Descriptor Model** | Explicit Bind Groups (emulated/restricted) | Explicit Descriptor Sets | **Global Bindless Heaps** (`update_after_bind`) |
-| **GPU Hazard Tracking**| Heavy runtime CPU hazard/barrier tracking | Static / runtime type-state tracking | **Explicit / Manual** (Timeline Semaphores & Barriers) |
-| **Clean Compile Time** | 25 – 45 seconds | 10 – 20 seconds | **~1.5 seconds** |
-| **Dependencies** | Naga, spirv, wgpu-core, wgpu-hal, etc. | Custom proc-macros, large type hierarchy | `ash`, `bitflags`, `thiserror`, `raw-window-handle` |
-| **C / FFI Support** | Separate `wgpu-native` project | Rust only | **Built-in C99 FFI (`include/lgpu.h`)** |
+| Dimension | `wgpu` | `vulkano` | `kvark/blade` | `lgpu` |
+| :--- | :--- | :--- | :--- | :--- |
+| **API Target** | WebGPU Specification | Vulkan 1.0 – 1.2+ | Low-overhead Native Abstraction | **Vulkan 1.3+ Native** |
+| **Backends** | Vulkan, Metal, D3D12, WebGL, WebGPU | Vulkan only | Vulkan, Metal, GLES/WebGL2 | **Vulkan 1.3 only** (native drivers / MoltenVK) |
+| **Shader Model** | WGSL (Naga translation to SPIR-V/MSL/HLSL) | Offline or macro-compiled SPIR-V | WGSL via Naga AST reflection | **Native SPIR-V** (runtime WGSL optional via Naga) |
+| **Render Pass Model** | RenderPass objects (`wgpu::RenderPass`) | RenderPass state objects (`vulkano::render_pass`) | Pass closures / encoder passes | **Dynamic Rendering only** (`VK_KHR_dynamic_rendering`) |
+| **Descriptor Model** | Explicit Bind Groups (emulated/restricted) | Explicit Descriptor Sets | Naga-reflected bind groups + bindless | **Global Bindless Heaps** (`update_after_bind`) |
+| **GPU Hazard Tracking**| Heavy runtime CPU hazard/barrier tracking | Static / runtime type-state tracking | Global Pass-Boundary Barriers (`GENERAL` layout) | **Explicit / Manual** (Timeline Semaphores & Barriers) |
+| **Clean Compile Time** | 25 – 45 seconds | 10 – 20 seconds | 8 – 15 seconds | **~1.5 seconds** |
+| **FFI / Language** | Separate `wgpu-native` project | Rust only | Rust only (`blade-graphics`, `blade-macros`) | **Built-in C99 FFI (`include/lgpu.h`)** |
+| **Scope** | Universal cross-platform GPU standard | Type-safe Vulkan wrapper | Rendering toolkit (ray tracing, physics, egui) | **Micro-HAL & GPU wrapper** (no engine opinions) |
 
 ### Summary of Philosophy:
 - **Use `wgpu`** if you need cross-platform portability targeting the browser, Metal, DirectX 12, and Vulkan from a single codebase, and you want safe runtime GPU state-tracking.
 - **Use `vulkano`** if you want deep, type-safe compile-time checking of traditional Vulkan 1.0–1.2 pipelines and descriptor sets.
-- **Use `lgpu`** if you are targeting modern desktop hardware, want **instant compile times (~1.5s)**, prefer modern Vulkan 1.3 features (**Dynamic Rendering** without `VkRenderPass` boilerplate, and **global bindless descriptor heaps**), and want an optional universal C99 FFI.
+- **Use `blade`** if you want a lean, multi-backend (Vulkan + Metal) Rust-first abstraction with built-in ray-tracing queries, Rapier physics, and egui integration.
+- **Use `lgpu`** if you are targeting modern desktop hardware, want **instant compile times (~1.5s)**, prefer modern Vulkan 1.3 features (**Dynamic Rendering** without `VkRenderPass` boilerplate, and **global bindless descriptor heaps**), and want an optional universal C99 FFI for C, C++, Zig, or Odin.
+
+### Deep Dive: `lgpu` vs `kvark/blade`
+`lgpu` and `blade` share an important design conclusion: **`wgpu`'s heavy per-resource tracking DAGs and WebGPU validation layers impose noticeable CPU overhead and friction that native desktop applications do not need.** Both libraries reject heavy CPU state tracking in favor of lean execution.
+
+However, they differ in several core areas:
+1. **API Philosophy**: `blade` abstracts over Vulkan, Metal, and GLES. To achieve this, it maintains a common denominator across different platform backends (e.g. Metal Argument Buffers vs Vulkan descriptors). In contrast, `lgpu` is unapologetically Vulkan 1.3-native, depending directly on modern hardware features: `VK_KHR_dynamic_rendering` (completely eliminating `VkRenderPass` boilerplate), unbounded `update_after_bind` descriptor heaps, and timeline semaphores.
+2. **C99 / Multi-Language Support**: `blade` is tightly coupled to the Rust ecosystem (procedural derive macros, Naga AST parsing). `lgpu` was designed from day one with a clean C-ABI (`lgpu-c` and single-header `include/lgpu.h`), enabling immediate use in C99, C++, Zig, or Odin without requiring a Rust build toolchain.
+3. **Synchronization Model**: `blade` uses *Global Pass-Boundary Barriers* (leaving textures in `GENERAL` layout and issuing coarse barriers between aggregate pass kinds to avoid per-resource tracking). `lgpu` provides explicit pipeline barriers (`encoder.pipeline_barrier()`) and timeline semaphores, giving the developer direct, predictable control without forcing all textures into `GENERAL` layout.
+4. **Shader Ingestion**: `blade` strictly requires WGSL via `naga`. `lgpu` accepts raw, precompiled SPIR-V bytecode directly (or WGSL via Naga optionally) and provides direct access to Vulkan push constants.
+5. **Scope**: `blade` scales into a full rendering framework (`blade-render`, hardware ray tracing queries, Rapier3D physics, egui integration). `lgpu` is strictly a micro-HAL and GPU wrapper that imposes no engine or scene-graph architecture.
 
 ---
 
