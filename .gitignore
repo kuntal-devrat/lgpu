@@ -4,3 +4,10 @@ target/
 .DS_Store
 .agents/
 brag-output/
+examples/c_example/c_example
+examples/cpp_example/cpp_example
+examples/zig_example/zig_example
+examples/zig_example/main
+*.o
+.zig-cache/
+zig-out/

@@ -20,7 +20,9 @@ lgpu/
 │   ├── 04_bindless_100k/
 │   ├── 05_window_shader/
 │   ├── 06_voxel_renderer/
-│   └── c_example/
+│   ├── c_example/
+│   ├── cpp_example/
+│   └── zig_example/
 └── docs/              # Technical documentation and architecture guides
 ```
 

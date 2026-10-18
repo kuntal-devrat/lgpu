@@ -313,12 +313,20 @@ struct HitRecord {
     normal: vec3<f32>,
     voxel_type: u32,
     dist: f32,
+    water_hit: bool,
+    water_dist: f32,
+    water_pos: vec3<f32>,
+    water_normal: vec3<f32>,
 };
 
 fn raymarch_dda(ray_orig: vec3<f32>, ray_dir: vec3<f32>, max_dist: f32, mode: u32) -> HitRecord {
     var rec: HitRecord;
     rec.hit = false;
     rec.dist = max_dist;
+    rec.water_hit = false;
+    rec.water_dist = max_dist;
+    rec.water_pos = vec3<f32>(0.0);
+    rec.water_normal = vec3<f32>(0.0, 1.0, 0.0);
 
     var pos = vec3<i32>(floor(ray_orig));
     let step_dir = vec3<i32>(sign(ray_dir));
@@ -347,10 +355,34 @@ fn raymarch_dda(ray_orig: vec3<f32>, ray_dir: vec3<f32>, max_dist: f32, mode: u3
     var mask = vec3<f32>(0.0, 0.0, 0.0);
     var d = 0.0;
 
-    // Up to 140 DDA steps for depth & distance coverage
-    for (var i = 0; i < 140; i = i + 1) {
+    // Check if ray origin is inside water
+    let start_v = get_voxel(pos, mode);
+    if (start_v == VOXEL_WATER) {
+        rec.water_hit = true;
+        rec.water_dist = 0.0;
+        rec.water_pos = ray_orig;
+        rec.water_normal = vec3<f32>(0.0, 1.0, 0.0);
+    }
+
+    for (var i = 0; i < 150; i = i + 1) {
+        // Early vertical bounds cull for performance
+        if (pos.y > 64 && step_dir.y >= 0) {
+            break;
+        }
+        if (pos.y < 0 && step_dir.y <= 0) {
+            break;
+        }
+
         let v = get_voxel(pos, mode);
-        if (v != VOXEL_AIR) {
+        if (v == VOXEL_WATER) {
+            if (!rec.water_hit) {
+                rec.water_hit = true;
+                rec.water_dist = d;
+                rec.water_pos = ray_orig + ray_dir * d;
+                rec.water_normal = -vec3<f32>(step_dir) * mask;
+            }
+            // March through water volume to hit underlying riverbed / terrain
+        } else if (v != VOXEL_AIR) {
             rec.hit = true;
             rec.voxel_pos = pos;
             rec.voxel_type = v;
@@ -483,7 +515,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let max_render_dist = 160.0;
     let hit = raymarch_dda(pc.cam_pos, ray_dir, max_render_dist, pc.mode);
 
-    if (!hit.hit) {
+    if (!hit.hit && !hit.water_hit) {
         return vec4<f32>(sky_color, 1.0);
     }
 
@@ -507,42 +539,89 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(id_col, 1.0);
     }
 
-    // Mode 0: Beauty Lighting Model
-    let albedo = get_voxel_color(hit.voxel_type, hit.normal, hit.voxel_pos);
+    // --- Mode 0: Full Beauty Lighting ---
+    var final_color = vec3<f32>(0.0);
 
-    // Diffuse lighting from sun
-    let ndotl = max(dot(hit.normal, sun_dir), 0.0);
+    // 1. Shade solid ground (whether on land or underwater)
+    var ground_color = sky_color;
+    if (hit.hit) {
+        let albedo = get_voxel_color(hit.voxel_type, hit.normal, hit.voxel_pos);
+        let ndotl = max(dot(hit.normal, sun_dir), 0.0);
+        let ao = calc_ambient_occlusion(hit.voxel_pos, hit.normal, pc.mode);
 
-    // Ambient occlusion
-    let ao = calc_ambient_occlusion(hit.voxel_pos, hit.normal, pc.mode);
+        let shadow_orig = pc.cam_pos + ray_dir * hit.dist + hit.normal * 0.08;
+        var shadow = 1.0;
+        if (ndotl > 0.05) {
+            shadow = cast_shadow_ray(shadow_orig, sun_dir, 35, pc.mode);
+        } else {
+            shadow = 0.3;
+        }
 
-    // Shadow ray (offset slightly along normal to avoid self-shadow)
-    let shadow_orig = pc.cam_pos + ray_dir * hit.dist + hit.normal * 0.08;
-    var shadow = 1.0;
-    if (ndotl > 0.05) {
-        shadow = cast_shadow_ray(shadow_orig, sun_dir, 40, pc.mode);
-    } else {
-        shadow = 0.3;
+        let ambient_light = vec3<f32>(0.28, 0.35, 0.45) * ao;
+        let sun_color = vec3<f32>(1.1, 1.02, 0.90);
+        let diffuse = sun_color * ndotl * shadow * ao;
+
+        ground_color = albedo * (ambient_light + diffuse);
     }
 
-    // Ambient term + directional sunlight
-    let ambient_light = vec3<f32>(0.28, 0.35, 0.45) * ao;
-    let sun_color = vec3<f32>(1.1, 1.02, 0.90);
-    let diffuse = sun_color * ndotl * shadow * ao;
+    // 2. Handle Minecraft-style translucent water
+    if (hit.water_hit) {
+        // Compute water depth: distance ray traveled through water column
+        let water_depth = max(hit.dist - hit.water_dist, 0.0);
 
-    var final_color = albedo * (ambient_light + diffuse);
+        // Animated water caustics on underwater seabed
+        if (hit.hit) {
+            let wp = vec3<f32>(hit.voxel_pos);
+            let caustic = (sin((wp.x + wp.z) * 1.2 + pc.time * 2.8) * cos((wp.x - wp.z) * 1.2 + pc.time * 2.2) + 1.0) * 0.14;
+            ground_color = ground_color + vec3<f32>(0.1, 0.25, 0.3) * caustic;
+        }
 
-    // Water specularity
-    if (hit.voxel_type == VOXEL_WATER && hit.normal.y > 0.5) {
+        // Beer-Lambert law depth absorption (water absorbs red/green faster than blue)
+        let absorb = exp(-water_depth * vec3<f32>(0.16, 0.06, 0.02));
+        let water_fog = vec3<f32>(0.08, 0.32, 0.58);
+        let underwater_scenery = mix(water_fog, ground_color, absorb);
+
+        // Surface wave perturbation
+        var wave_norm = hit.water_normal;
+        if (abs(hit.water_normal.y) > 0.5) {
+            let p = hit.water_pos;
+            let wx = sin(p.z * 1.6 + pc.time * 2.5) * 0.06 + sin(p.x * 2.8 + pc.time * 1.7) * 0.03;
+            let wz = cos(p.x * 1.6 + pc.time * 2.3) * 0.06 + cos(p.z * 2.8 + pc.time * 1.9) * 0.03;
+            wave_norm = normalize(vec3<f32>(wx, 1.0, wz));
+        }
+
+        // Fresnel reflection
+        let cos_theta = clamp(-dot(ray_dir, wave_norm), 0.0, 1.0);
+        let fresnel = 0.06 + 0.94 * pow(1.0 - cos_theta, 4.0);
+
+        // Sky reflection on water
+        let refl_dir = reflect(ray_dir, wave_norm);
+        var refl_sky = mix(sky_horizon, sky_top, clamp(refl_dir.y * 1.5, 0.0, 1.0));
+        let sun_refl_dot = max(dot(refl_dir, sun_dir), 0.0);
+        refl_sky = refl_sky + vec3<f32>(1.0, 0.92, 0.75) * pow(sun_refl_dot, 64.0) * 2.0;
+
+        // Sun specular glint
         let half_vec = normalize(sun_dir - ray_dir);
-        let spec = pow(max(dot(hit.normal, half_vec), 0.0), 32.0);
-        final_color = final_color + vec3<f32>(0.9, 0.95, 1.0) * spec * shadow * 0.6;
+        let spec = pow(max(dot(wave_norm, half_vec), 0.0), 96.0) * 2.2;
+        let specular = vec3<f32>(1.0, 0.96, 0.88) * spec;
+
+        // Composite water: blend underwater scenery with surface sky reflection
+        let water_composite = mix(underwater_scenery, refl_sky, clamp(fresnel, 0.20, 0.85)) + specular;
+
+        // Atmospheric distance fog to water surface
+        let fog_factor = clamp(hit.water_dist / max_render_dist, 0.0, 1.0);
+        final_color = mix(water_composite, sky_horizon, fog_factor * fog_factor);
+    } else {
+        // Pure land terrain
+        let fog_factor = clamp(hit.dist / max_render_dist, 0.0, 1.0);
+        final_color = mix(ground_color, sky_horizon, fog_factor * fog_factor);
     }
 
-    // Atmospheric depth fog
-    let fog_factor = clamp(hit.dist / max_render_dist, 0.0, 1.0);
-    let fog_smooth = fog_factor * fog_factor;
-    final_color = mix(final_color, sky_horizon, fog_smooth);
+    // Camera underwater effect
+    if (pc.cam_pos.y <= 16.0 && get_voxel(vec3<i32>(floor(pc.cam_pos)), pc.mode) == VOXEL_WATER) {
+        let underwater_tint = vec3<f32>(0.08, 0.35, 0.65);
+        final_color = mix(final_color, underwater_tint, 0.45);
+    }
 
     return vec4<f32>(final_color, 1.0);
 }

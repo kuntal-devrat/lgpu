@@ -140,12 +140,17 @@ int main(void) {
 }
 ```
 
-Build and link against the dynamic library:
+Build and run the polyglot examples:
 
 ```bash
-cargo build --release -p lgpu-c
-gcc -std=c99 main.c -Icrates/lgpu-c/include -Ltarget/release -llgpu_c -Wl,-rpath,target/release -o app
-./app
+# C99 Example
+make -C examples/c_example run
+
+# C++17 Example (RAII handles, GPU-to-GPU buffer copies)
+make -C examples/cpp_example run
+
+# Zig Example (C-import, buffer allocation & verification)
+make -C examples/zig_example run
 ```
 
 ---
@@ -170,8 +175,13 @@ cargo run -p example-bindless-100k
 # Interactive window with 3D torus raymarched shader
 cargo run --release -p example-window-shader
 
-# Real-time voxel raymarching DDA engine (highlands, islands, citadel)
+# Real-time voxel raymarching engine (Minecraft-style translucent water, procedural mountains, caustics, floating islands)
 cargo run --release -p example-voxel-renderer
+
+# C99, C++17, and Zig examples via single-header include/lgpu.h
+make -C examples/c_example run
+make -C examples/cpp_example run
+make -C examples/zig_example run
 ```
 
 ---

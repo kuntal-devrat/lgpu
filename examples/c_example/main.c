@@ -1,10 +1,10 @@
 /**
  * @file main.c
- * @brief Comprehensive C99 program demonstrating all features of lgpu via lgpu.h:
+ * @brief C99 example demonstrating lgpu C API:
  *  - Adapter hardware info query
  *  - Host initialized buffers (lgpu_create_buffer_init)
  *  - Bindless buffer, texture, and sampler descriptor slot indexing
- *  - Texture creation, property accessors, and clear/render
+ *  - Texture creation and clear/render
  *  - Dynamic rendering and triangle rasterization
  *  - Texture-to-buffer readback
  *  - Timeline semaphores synchronization
@@ -43,7 +43,7 @@ static const uint32_t TRIANGLE_SPV[] = {
 };
 
 int main(void) {
-    printf("=== lgpu: Pure C99 ABI & Feature Parity Demonstration ===\n");
+    printf("=== lgpu C99 Example ===\n");
     printf("lgpu ABI Version: %u\n", lgpu_version());
 
     // 1. Create Instance
@@ -222,6 +222,6 @@ int main(void) {
     lgpu_destroy_device(device);
     lgpu_destroy_instance(instance);
 
-    printf("\nSUCCESS! All Phase 4 C99 FFI features verified with 100%% parity.\n");
+    printf("\nC99 example completed successfully.\n");
     return 0;
 }

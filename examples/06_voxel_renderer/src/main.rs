@@ -187,8 +187,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
     println!("Controls:");
     println!("  [W, A, S, D]       Fly forward / left / back / right");
-    println!("  [Space, Shift]     Fly up / down");
-    println!("  [Mouse Drag]       Look around (yaw / pitch)");
+    println!("  [Space / C, Ctrl]  Fly up / fly down");
+    println!("  [Shift]            Sprint (2.5x speed boost)");
+    println!("  [Mouse Drag]       Smooth look around (yaw / pitch)");
     println!("  [Arrow Keys]       Look around alternative");
     println!("  [1, 2, 3]          Switch Voxel Worlds (Highlands, Islands, Citadel)");
     println!("  [Tab]              Cycle Render Modes (Beauty, AO, Normals, Depth, IDs)");
@@ -324,6 +325,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 WindowEvent::MouseInput { state, button, .. } => {
                     if button == MouseButton::Left {
                         mouse_dragging = state == ElementState::Pressed;
+                        if mouse_dragging {
+                            last_mouse_pos = None; // Reset to avoid cursor snap jumps
+                        }
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
@@ -331,22 +335,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some((lx, ly)) = last_mouse_pos {
                             let dx = (position.x - lx) as f32;
                             let dy = (position.y - ly) as f32;
-                            camera.yaw += dx * 0.25;
-                            camera.pitch = (camera.pitch - dy * 0.25).clamp(-88.0, 88.0);
+                            camera.yaw += dx * 0.15;
+                            camera.pitch = (camera.pitch - dy * 0.15).clamp(-88.0, 88.0);
                         }
+                        last_mouse_pos = Some((position.x, position.y));
                     }
-                    last_mouse_pos = Some((position.x, position.y));
                 }
                 WindowEvent::RedrawRequested => {
                     let now = Instant::now();
-                    let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
+                    let dt = now.duration_since(last_frame).as_secs_f32().clamp(0.001, 0.05);
                     last_frame = now;
 
                     // Camera movement based on held keys
                     let fwd = camera.forward_vector();
                     let right = camera.right_vector();
-                    let _up = camera.up_vector();
-                    let speed = 18.0 * dt;
+
+                    // Sprint with Shift (2.5x speed boost)
+                    let is_sprinting = held_keys.contains(&KeyCode::ShiftLeft) || held_keys.contains(&KeyCode::ShiftRight);
+                    let speed_mult = if is_sprinting { 2.5 } else { 1.0 };
+                    let speed = 16.0 * speed_mult * dt;
 
                     use winit::keyboard::KeyCode;
                     if held_keys.contains(&KeyCode::KeyW) {
@@ -372,7 +379,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if held_keys.contains(&KeyCode::Space) {
                         camera.pos[1] += speed;
                     }
-                    if held_keys.contains(&KeyCode::ShiftLeft) || held_keys.contains(&KeyCode::ShiftRight) {
+                    if held_keys.contains(&KeyCode::KeyC) || held_keys.contains(&KeyCode::ControlLeft) {
                         camera.pos[1] -= speed;
                     }
                     if held_keys.contains(&KeyCode::ArrowLeft) {
