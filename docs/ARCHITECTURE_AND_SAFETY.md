@@ -6,24 +6,25 @@ This document outlines the architectural philosophy, safety invariants, synchron
 
 ## 1. Ecosystem Positioning: How `lgpu` Compares
 
-Developers often ask how `lgpu` relates to existing graphics layers in the Rust ecosystem like **`wgpu`** and **`vulkano`**:
+Developers often ask how `lgpu` relates to existing graphics layers in the Rust ecosystem like **`wgpu`**, **`vulkano`**, and **`kvark/blade`**:
 
-| Dimension | `wgpu` | `vulkano` | `lgpu` |
-| :--- | :--- | :--- | :--- |
-| **API Target** | WebGPU Specification | Vulkan 1.0 – 1.2+ | **Vulkan 1.3+ Native** |
-| **Backends** | Vulkan, Metal, D3D12, WebGL, WebGPU | Vulkan only | **Vulkan 1.3 only** (via native drivers / MoltenVK) |
-| **Shader Model** | WGSL (runtime translation to SPIR-V/MSL/HLSL via Naga) | Offline or macro-compiled SPIR-V | **Native SPIR-V** (runtime WGSL optional via Naga) |
-| **Render Pass Model** | RenderPass objects (`wgpu::RenderPass`) | RenderPass state objects (`vulkano::render_pass`) | **Dynamic Rendering only** (`VK_KHR_dynamic_rendering`) |
-| **Descriptor Model** | Explicit Bind Groups (emulated/restricted) | Explicit Descriptor Sets | **Global Bindless Heaps** (`update_after_bind`) |
-| **GPU Hazard Tracking**| Heavy runtime CPU hazard/barrier tracking | Static / runtime type-state tracking | **Explicit / Manual** (Timeline Semaphores & Barriers) |
-| **Clean Compile Time** | 25 – 45 seconds | 10 – 20 seconds | **~1.5 seconds** |
-| **Dependencies** | Naga, spirv, wgpu-core, wgpu-hal, etc. | Custom proc-macros, large type hierarchy | `ash`, `bitflags`, `thiserror`, `raw-window-handle` |
-| **C / FFI Support** | Separate `wgpu-native` project | Rust only | **Built-in C99 FFI (`include/lgpu.h`)** |
+| Dimension | `wgpu` | `vulkano` | `kvark/blade` | `lgpu` |
+| :--- | :--- | :--- | :--- | :--- |
+| **API Target** | WebGPU Specification | Vulkan 1.0 – 1.2+ | Minimalist modern GPU layer | **Vulkan 1.3+ Native** |
+| **Backends** | Vulkan, Metal, D3D12, WebGL, WebGPU | Vulkan only | Vulkan, Metal | **Vulkan 1.3 only** (via native drivers / MoltenVK) |
+| **Shader Model** | WGSL (runtime translation via Naga) | Offline or macro SPIR-V | SLANG / WGSL via Naga | **Native SPIR-V** (runtime WGSL optional via Naga) |
+| **Render Pass Model** | RenderPass objects (`wgpu::RenderPass`) | RenderPass state objects | Encoder-scoped render commands | **Dynamic Rendering only** (`VK_KHR_dynamic_rendering`) |
+| **Descriptor Model** | Explicit Bind Groups | Explicit Descriptor Sets | Resource tables / Bind groups | **Global Bindless Heaps** (`update_after_bind`) |
+| **GPU Hazard Tracking**| Heavy runtime CPU hazard/barrier tracking | Static / runtime type-state | Explicit synchronization | **Explicit / Manual** (Timeline Semaphores & Barriers) |
+| **Clean Compile Time** | 25 – 45 seconds | 10 – 20 seconds | 8 – 15 seconds | **~1.5 seconds** |
+| **Dependencies** | Naga, spirv, wgpu-core, wgpu-hal, etc. | Custom proc-macros, large type tree | naga, chooz, glow/metal | `ash`, `bitflags`, `thiserror`, `raw-window-handle` |
+| **C / FFI Support** | Separate `wgpu-native` project | Rust only | Rust only | **Built-in C99 FFI (`include/lgpu.h`)** |
 
 ### Summary of Philosophy:
 - **Use `wgpu`** if you need cross-platform portability targeting the browser, Metal, DirectX 12, and Vulkan from a single codebase, and you want safe runtime GPU state-tracking.
 - **Use `vulkano`** if you want deep, type-safe compile-time checking of traditional Vulkan 1.0–1.2 pipelines and descriptor sets.
-- **Use `lgpu`** if you are targeting modern desktop hardware, want **instant compile times (~1.5s)**, prefer modern Vulkan 1.3 features (**Dynamic Rendering** without `VkRenderPass` boilerplate, and **global bindless descriptor heaps**), and want an optional universal C99 FFI.
+- **Use `blade`** if you want a minimalist, modern Rust-first API spanning both Vulkan and Apple Metal.
+- **Use `lgpu`** if you are targeting modern desktop hardware, want **instant compile times (~1.5s)**, prefer modern Vulkan 1.3 features (**Dynamic Rendering** without `VkRenderPass` boilerplate, and **global bindless descriptor heaps**), and want an optional universal C99 / C++ / Zig FFI.
 
 ---
 

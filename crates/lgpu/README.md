@@ -14,12 +14,11 @@ Designed for desktop experiments where you want dynamic rendering and global bin
 ## Quick Example
 
 ```rust,no_run
-use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation};
+use lgpu::{BufferDesc, BufferUsage, MemoryLocation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let instance = Instance::new()?;
-    let adapters = instance.enumerate_adapters()?;
-    let (device, queue) = adapters[0].request_device(&instance)?;
+    // One-line GPU initialization
+    let (device, _queue) = lgpu::default_device()?;
 
     let desc = BufferDesc {
         label: Some("ComputeBuffer"),

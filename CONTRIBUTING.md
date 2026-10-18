@@ -84,7 +84,7 @@ To protect repository stability and prevent unintended crate publishing as contr
 
 1. **Pull Requests & Main Branch CI (`ci.yml`)**:
    - Every pull request and push to `main` triggers automated CI validation.
-   - Runs formatting checks, Clippy lints (`-D warnings`), cross-platform test matrices (Linux Mesa/Lavapipe, Windows, macOS), doc builds, and dry-run package checks (`cargo publish --dry-run`).
+   - Runs formatting checks, Clippy lints (`-D warnings`), cross-platform test matrices (Linux Mesa/Lavapipe, Windows, macOS), C99 & C++17 example builds, and doc builds.
    - **No Releases**: PRs and merges to `main` **never** publish to crates.io or create GitHub releases. Contributions can be merged freely without version conflicts.
 
 2. **Releases & Publishing (`release.yml`)**:

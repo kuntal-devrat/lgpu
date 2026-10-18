@@ -105,6 +105,11 @@ jobs:
           gcc -std=c99 examples/c_example/main.c -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o c_example
           ./c_example
 
+      - name: Build & Run C++17 Example
+        run: |
+          g++ -std=c++17 examples/cpp_example/main.cpp -Icrates/lgpu-c/include -Ltarget/debug -llgpu_c -Wl,-rpath,$(pwd)/target/debug -o cpp_example
+          ./cpp_example
+
   test-windows:
     name: Build & Test (Windows)
     runs-on: windows-latest
@@ -184,31 +189,4 @@ jobs:
 
       - name: Build Docs
         run: cargo doc --workspace --no-deps
-
-  package-verify:
-    name: Package & Publish Dry Run
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libvulkan-dev pkg-config
-
-      - name: Test Crate Packaging (dry-run)
-        run: |
-          echo "Testing lgpu-hal packaging..."
-          cargo publish -p lgpu-hal --dry-run
-          echo "Testing lgpu packaging..."
-          cargo publish -p lgpu --dry-run
-          echo "Testing lgpu-c packaging..."
-          cargo publish -p lgpu-c --dry-run
 

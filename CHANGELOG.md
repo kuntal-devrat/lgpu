@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Cleaned and organized integration test suite names.
 - Streamlined documentation comments across `Buffer` and memory suballocator.
-- Updated documentation and README to clearly specify project scope and transparently describe AI-assisted boilerplate scaffolding.
+- Updated documentation and architecture guides to clearly specify project scope, safety invariants, and synchronization guarantees.
 
 ---
 

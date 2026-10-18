@@ -19,7 +19,7 @@ pub struct Queue {
 }
 
 impl Device {
-    /// Convenience helper that initializes a default Vulkan 1.3 [`Instance`], selects
+    /// Convenience helper that initializes a default Vulkan 1.3 [`crate::Instance`], selects
     /// the first available physical GPU adapter, and returns the initialized [`Device`] and [`Queue`].
     ///
     /// Ideal for quick prototyping, headless compute jobs, and test suites.

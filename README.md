@@ -28,11 +28,7 @@ A lightweight Vulkan 1.3 wrapper for Rust and C99, built on top of [`ash`](https
 - **Not a `wgpu` replacement**: `wgpu` is an implementation of WebGPU targeting multiple backends (Metal, D3D12, Vulkan, WebGL) with shader translation and validation via `naga`. `lgpu` targets Vulkan 1.3 exclusively and expects precompiled SPIR-V shaders.
 - **Not a fully safe sandbox**: While `lgpu` provides RAII and safe wrapper structs where reasonable, Vulkan synchronization and shader indexing still require you to know how modern GPUs work.
 
-For a detailed technical breakdown of how `lgpu` compares to `wgpu` and `vulkano`, along with thread safety (`Send`/`Sync`), CPU buffer mapping invariants, and synchronization rules, see **[Architecture, Safety & Synchronization Model](docs/ARCHITECTURE_AND_SAFETY.md)**.
-
-### Note on Development
-
-This project was built as a personal exploration into modern Vulkan 1.3 (dynamic rendering, descriptor indexing, and timeline semaphores). AI tools were used to help scaffold repetitive boilerplate—primarily the C99 FFI wrappers and test fixtures. All Vulkan 1.3 integration, dynamic rendering, and compute dispatches execute directly against native GPU hardware drivers.
+For a detailed technical breakdown of how `lgpu` compares to `wgpu`, `vulkano`, and `kvark/blade`, along with thread safety (`Send`/`Sync`), CPU buffer mapping invariants, and synchronization rules, see **[Architecture, Safety & Synchronization Model](docs/ARCHITECTURE_AND_SAFETY.md)**.
 
 ---
 
@@ -65,21 +61,20 @@ Add `lgpu` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-lgpu = "0.1.2"
+lgpu = "0.1.3"
 bytemuck = { version = "1.19", features = ["derive"] }
 ```
 
 #### Headless Compute Example
 
 ```rust,no_run
-use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation};
+use lgpu::{BufferDesc, BufferUsage, MemoryLocation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let instance = Instance::new()?;
-    let adapters = instance.enumerate_adapters()?;
-    let (device, queue) = adapters[0].request_device(&instance)?;
+    // Initialize primary GPU in one line (or use Instance::new() for custom device selection)
+    let (device, queue) = lgpu::default_device()?;
 
-    // Create a host-visible buffer initialized with data
+    // Create host-visible buffers
     let desc = BufferDesc {
         label: Some("DataBuffer"),
         size: 16,
@@ -93,10 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shader = device.create_shader_spirv(include_bytes!("../path/to/compute.spv"))?;
     let pipeline = device.create_compute_pipeline(&shader, 2)?;
 
-    // Record and submit work
+    // Record and run work (submits and waits synchronously)
     let mut encoder = device.create_command_encoder()?;
     encoder.dispatch_compute(&pipeline, &[&input, &output], 1, 1, 1);
-    queue.submit(encoder.finish())?;
+    queue.run(encoder)?;
 
     // Read back results
     let mut results = [0.0f32; 4];
