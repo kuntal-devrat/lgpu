@@ -130,3 +130,81 @@ fn test_pipeline_cache_reuse() {
         queue.submit(cmd).expect("submit failed");
     }
 }
+
+#[test]
+fn test_suballocator_block_reclamation_and_trim() {
+    let instance = Instance::new().expect("Failed to create instance");
+    let adapters = instance
+        .enumerate_adapters()
+        .expect("Failed to enumerate adapters");
+    if adapters.is_empty() {
+        return;
+    }
+    let (device, _) = adapters[0]
+        .request_device(&instance)
+        .expect("Failed to request device");
+
+    assert_eq!(device.suballocator_block_count(), 0);
+
+    // Each buffer is 10 MiB (< SUBALLOCATION_THRESHOLD of 16 MiB), so it will be suballocated.
+    // In a 32 MiB DEFAULT_BLOCK_SIZE, only 3 buffers fit per block.
+    // Allocating 8 buffers forces at least 3 distinct 32 MiB blocks to be allocated.
+    const CHUNK_SIZE: u64 = 10 * 1024 * 1024;
+    let desc = BufferDesc {
+        label: Some("LargeSuballocBuffer"),
+        size: CHUNK_SIZE,
+        usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+        memory_location: MemoryLocation::CpuToGpu,
+    };
+
+    let mut buffers = Vec::new();
+    for i in 0..8 {
+        let b = device.create_buffer(&desc).expect("buffer creation failed");
+        b.write_at(0, &[(i as u8) + 1]).expect("write failed");
+        buffers.push(b);
+    }
+
+    let initial_blocks = device.suballocator_block_count();
+    assert!(
+        initial_blocks >= 3,
+        "Expected at least 3 suballocated blocks, got {}",
+        initial_blocks
+    );
+
+    // Drop all buffers. The suballocator should automatically reclaim redundant empty blocks,
+    // retaining at most 1 empty block per memory configuration as a warm pool.
+    drop(buffers);
+
+    let blocks_after_drop = device.suballocator_block_count();
+    assert_eq!(
+        blocks_after_drop, 1,
+        "Suballocator should have automatically reclaimed redundant empty blocks down to 1 warm block"
+    );
+
+    // Explicitly trim all empty memory blocks back to Vulkan
+    let reclaimed_count = device.trim_memory();
+    assert_eq!(reclaimed_count, 1);
+    assert_eq!(
+        device.suballocator_block_count(),
+        0,
+        "All blocks should be released after trim_memory"
+    );
+
+    // Verify suballocator recovers and allocates cleanly after full trim
+    let fresh_buf = device
+        .create_buffer(&BufferDesc {
+            label: Some("FreshBufferAfterTrim"),
+            size: 1024,
+            usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            memory_location: MemoryLocation::CpuToGpu,
+        })
+        .expect("Failed to allocate buffer after trim");
+
+    assert_eq!(device.suballocator_block_count(), 1);
+    fresh_buf
+        .write_at(0, &[0xDE, 0xAD, 0xBE, 0xEF])
+        .expect("write failed");
+    let mut read_back = [0u8; 4];
+    fresh_buf.read_at(0, &mut read_back).expect("read failed");
+    assert_eq!(read_back, [0xDE, 0xAD, 0xBE, 0xEF]);
+}

@@ -86,6 +86,10 @@ impl MemoryBlock {
         }
         self.free_chunks = merged;
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.free_chunks.len() == 1 && self.free_chunks[0] == (0, self.size)
+    }
 }
 
 pub struct VulkanSuballocator {
@@ -221,10 +225,90 @@ impl VulkanSuballocator {
         })
     }
 
-    pub fn free(&mut self, block_id: usize, offset: u64, size: u64) {
-        if let Some(block) = self.blocks.iter_mut().find(|b| b.id == block_id) {
-            block.free(offset, size);
+    pub fn free(&mut self, block_id: usize, offset: u64, size: u64, device: &ash::Device) {
+        let mut block_to_reclaim = None;
+
+        if let Some(pos) = self.blocks.iter().position(|b| b.id == block_id) {
+            self.blocks[pos].free(offset, size);
+
+            if self.blocks[pos].is_empty() {
+                let mem_idx = self.blocks[pos].memory_type_index;
+                let is_host_vis = self.blocks[pos].is_host_visible;
+                let alloc_type = self.blocks[pos].allocation_type;
+
+                let empty_count = self
+                    .blocks
+                    .iter()
+                    .filter(|b| {
+                        b.memory_type_index == mem_idx
+                            && b.is_host_visible == is_host_vis
+                            && b.allocation_type == alloc_type
+                            && b.is_empty()
+                    })
+                    .count();
+
+                // Keep at most 1 empty block per configuration as a warm pool to prevent
+                // allocation thrashing. Any redundant empty blocks are immediately reclaimed.
+                if empty_count > 1 {
+                    block_to_reclaim = Some(pos);
+                }
+            }
         }
+
+        if let Some(pos) = block_to_reclaim {
+            let block = self.blocks.remove(pos);
+            unsafe {
+                if block.mapped_base.is_some() {
+                    device.unmap_memory(block.memory);
+                }
+                device.free_memory(block.memory, None);
+            }
+        }
+    }
+
+    /// Reclaims ALL completely empty blocks, releasing their GPU and host memory back to Vulkan.
+    /// Returns the number of reclaimed blocks.
+    pub fn trim(&mut self, device: &ash::Device) -> usize {
+        let mut freed_count = 0;
+        let mut i = 0;
+        while i < self.blocks.len() {
+            if self.blocks[i].is_empty() {
+                let block = self.blocks.remove(i);
+                unsafe {
+                    if block.mapped_base.is_some() {
+                        device.unmap_memory(block.memory);
+                    }
+                    device.free_memory(block.memory, None);
+                }
+                freed_count += 1;
+            } else {
+                i += 1;
+            }
+        }
+        freed_count
+    }
+
+    /// Returns the total number of blocks currently held by the suballocator.
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Returns the number of completely empty blocks currently held by the suballocator.
+    pub fn empty_block_count(&self) -> usize {
+        self.blocks.iter().filter(|b| b.is_empty()).count()
+    }
+
+    /// Returns the total capacity in bytes across all managed blocks.
+    pub fn total_capacity_bytes(&self) -> u64 {
+        self.blocks.iter().map(|b| b.size).sum()
+    }
+
+    /// Returns the total available free bytes across all managed blocks.
+    pub fn total_free_bytes(&self) -> u64 {
+        self.blocks
+            .iter()
+            .map(|b| b.free_chunks.iter().map(|&(_, sz)| sz).sum::<u64>())
+            .sum()
     }
 
     pub fn destroy(&mut self, device: &ash::Device) {

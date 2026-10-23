@@ -482,6 +482,12 @@ lgpu_result_t lgpu_dispatch_bindless_compute(
 /** Wait for all device operations to complete */
 lgpu_result_t lgpu_device_wait_idle(lgpu_device_t device);
 
+/** Reclaim completely empty memory blocks in the suballocator back to Vulkan. Returns freed block count. */
+uint32_t lgpu_device_trim_memory(lgpu_device_t device);
+
+/** Get the number of memory blocks currently held by the suballocator. */
+uint32_t lgpu_device_get_suballocator_block_count(lgpu_device_t device);
+
 /** Create a headless surface */
 lgpu_result_t lgpu_create_surface_headless(
     lgpu_instance_t instance,
