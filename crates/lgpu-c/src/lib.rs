@@ -1908,6 +1908,34 @@ pub unsafe extern "C" fn lgpu_device_wait_idle(device: *mut LgpuDeviceWrapper) -
     }
 }
 
+/// Reclaims completely empty memory blocks in the suballocator back to Vulkan.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer obtained from `lgpu_create_device`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_trim_memory(device: *mut LgpuDeviceWrapper) -> u32 {
+    if device.is_null() {
+        return 0;
+    }
+    (*device).device.trim_memory() as u32
+}
+
+/// Returns the number of memory blocks currently held by the suballocator.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer obtained from `lgpu_create_device`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_get_suballocator_block_count(
+    device: *mut LgpuDeviceWrapper,
+) -> u32 {
+    if device.is_null() {
+        return 0;
+    }
+    (*device).device.suballocator_block_count() as u32
+}
+
 /// Creates a headless surface for offscreen/test presentation.
 ///
 /// # Safety

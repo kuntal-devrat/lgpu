@@ -381,6 +381,27 @@ impl Device {
         self.vulkan_device.write_texture(raw_tex, data)?;
         Ok(())
     }
+
+    /// Reclaims completely empty memory blocks held by the suballocator back to Vulkan.
+    ///
+    /// By default, `lgpu` automatically frees redundant empty blocks while keeping up to 1
+    /// warm block per memory configuration for low-overhead reallocations. Calling `trim_memory`
+    /// releases even cached empty blocks, returning maximum GPU and host memory to the OS.
+    ///
+    /// Returns the number of blocks freed.
+    pub fn trim_memory(&self) -> usize {
+        self.vulkan_device.trim_memory()
+    }
+
+    /// Returns the total number of memory blocks currently held by the internal suballocator.
+    pub fn suballocator_block_count(&self) -> usize {
+        self.vulkan_device.suballocator_block_count()
+    }
+
+    /// Returns the number of empty memory blocks currently held in the suballocator.
+    pub fn suballocator_empty_block_count(&self) -> usize {
+        self.vulkan_device.suballocator_empty_block_count()
+    }
 }
 
 impl Queue {

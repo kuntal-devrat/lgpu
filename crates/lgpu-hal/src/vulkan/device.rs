@@ -80,6 +80,21 @@ impl VulkanDevice {
         }
         Ok(())
     }
+
+    /// Reclaims completely empty memory blocks in the suballocator back to Vulkan.
+    pub fn trim_memory(&self) -> usize {
+        self.allocator.lock().unwrap().trim(&self.device)
+    }
+
+    /// Returns the number of memory blocks currently held by the suballocator.
+    pub fn suballocator_block_count(&self) -> usize {
+        self.allocator.lock().unwrap().block_count()
+    }
+
+    /// Returns the number of empty memory blocks currently held in the suballocator.
+    pub fn suballocator_empty_block_count(&self) -> usize {
+        self.allocator.lock().unwrap().empty_block_count()
+    }
 }
 
 impl Drop for VulkanDevice {

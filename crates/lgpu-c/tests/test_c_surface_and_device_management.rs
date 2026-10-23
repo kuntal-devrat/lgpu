@@ -11,6 +11,8 @@ fn test_c_device_wait_idle() {
             lgpu_device_wait_idle(ptr::null_mut()),
             LgpuResult::ErrorGeneric
         );
+        assert_eq!(lgpu_device_trim_memory(ptr::null_mut()), 0);
+        assert_eq!(lgpu_device_get_suballocator_block_count(ptr::null_mut()), 0);
 
         let mut instance: *mut LgpuInstanceWrapper = ptr::null_mut();
         assert_eq!(lgpu_create_instance(&mut instance), LgpuResult::Success);
@@ -21,6 +23,10 @@ fn test_c_device_wait_idle() {
             lgpu_create_device(instance, 0, &mut device, &mut queue),
             LgpuResult::Success
         );
+
+        // Suballocator block query and trim
+        assert_eq!(lgpu_device_get_suballocator_block_count(device), 0);
+        assert_eq!(lgpu_device_trim_memory(device), 0);
 
         // Wait idle should succeed
         assert_eq!(lgpu_device_wait_idle(device), LgpuResult::Success);

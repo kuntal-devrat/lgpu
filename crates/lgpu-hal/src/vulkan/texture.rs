@@ -133,10 +133,12 @@ impl VulkanDevice {
                 .bind_image_memory(image, alloc.memory, alloc.offset)
             {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator
-                        .lock()
-                        .unwrap()
-                        .free(block_id, alloc.offset, mem_reqs.size);
+                    self.allocator.lock().unwrap().free(
+                        block_id,
+                        alloc.offset,
+                        mem_reqs.size,
+                        &self.device,
+                    );
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
@@ -206,6 +208,7 @@ impl VulkanDevice {
                         block_id,
                         texture.offset,
                         texture.allocated_size,
+                        &self.device,
                     );
                 } else {
                     self.device.free_memory(texture.memory, None);

@@ -89,10 +89,12 @@ impl VulkanDevice {
                 .bind_buffer_memory(buffer, alloc.memory, alloc.offset)
             {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator
-                        .lock()
-                        .unwrap()
-                        .free(block_id, alloc.offset, mem_reqs.size);
+                    self.allocator.lock().unwrap().free(
+                        block_id,
+                        alloc.offset,
+                        mem_reqs.size,
+                        &self.device,
+                    );
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
@@ -210,10 +212,12 @@ impl VulkanDevice {
             }
             self.device.destroy_buffer(buffer.buffer, None);
             if let Some(block_id) = buffer.block_id {
-                self.allocator
-                    .lock()
-                    .unwrap()
-                    .free(block_id, buffer.offset, buffer.allocated_size);
+                self.allocator.lock().unwrap().free(
+                    block_id,
+                    buffer.offset,
+                    buffer.allocated_size,
+                    &self.device,
+                );
             } else {
                 self.device.free_memory(buffer.memory, None);
             }
