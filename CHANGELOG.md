@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Soundness fix: `Arc<VulkanInstance>` retained in `Device` and `Queue` ensuring parent Vulkan instance outlives child devices during default device creation.
+- Suballocator memory reclamation: Automatically free completely empty memory blocks back to Vulkan (`vkFreeMemory`), keeping at most 1 empty block per memory type as a warm cache (#6).
+- Exposed `trim_memory()` and `suballocator_block_count()` on `Device`, `VulkanDevice`, and C FFI.
+- Surface swapchain deadlock fix: Implemented `Drop` for `SurfaceTexture` to cleanly signal in-flight frame fences and release acquired images back to the presentation engine if dropped without calling `present()` (#7).
 - Voxel renderer mouse look jumping on click by resetting last cursor position.
 - Smooth camera controls with sprint speed boost (`Shift`), vertical navigation (`Space` / `C`), and clamped frame deltas.
 - Early vertical bounds culling in voxel DDA to eliminate wasted steps into empty sky or void.
