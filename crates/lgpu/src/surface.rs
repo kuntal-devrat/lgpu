@@ -41,6 +41,8 @@ pub struct SurfaceTexture {
     pub(crate) render_semaphore: lgpu_hal::vulkan::vk::Semaphore,
     pub(crate) frame_fence: Option<lgpu_hal::vulkan::vk::Fence>,
     pub suboptimal: bool,
+    pub(crate) submitted: std::sync::atomic::AtomicBool,
+    pub(crate) presented: std::sync::atomic::AtomicBool,
 }
 
 impl Surface {
@@ -268,6 +270,8 @@ impl Surface {
             render_semaphore: rend_sem,
             frame_fence: Some(fence),
             suboptimal,
+            submitted: std::sync::atomic::AtomicBool::new(false),
+            presented: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -301,11 +305,57 @@ impl Drop for Surface {
 
 impl SurfaceTexture {
     pub fn present(self, queue: &Queue) -> Result<(), Error> {
+        self.presented
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         queue.vulkan_device.queue_present_raw(
             self.swapchain,
             self.image_index,
             &[self.render_semaphore],
         )?;
         Ok(())
+    }
+}
+
+impl Drop for SurfaceTexture {
+    fn drop(&mut self) {
+        if self.presented.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+
+        // Mark as presented to prevent any recursive or duplicate presents
+        self.presented
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let device = &self.texture.vulkan_device;
+
+        if !self.submitted.load(std::sync::atomic::Ordering::SeqCst) {
+            // Unsubmitted frame: fence was reset in get_current_texture and acquire_semaphore was signaled.
+            // Submit an empty queue batch to signal frame_fence and consume acquire_semaphore.
+            if let Some(fence) = self.frame_fence {
+                let queue = match device.queue.lock() {
+                    Ok(q) => q,
+                    Err(p) => p.into_inner(),
+                };
+                let submit_info = lgpu_hal::vulkan::vk::SubmitInfo::default()
+                    .wait_semaphores(std::slice::from_ref(&self.acquire_semaphore))
+                    .wait_dst_stage_mask(&[
+                        lgpu_hal::vulkan::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    ]);
+                unsafe {
+                    let _ = device.device.queue_submit(*queue, &[submit_info], fence);
+                }
+            }
+
+            // Return the acquired image back to the presentation engine.
+            let _ = device.queue_present_raw(self.swapchain, self.image_index, &[]);
+        } else {
+            // Frame work was submitted to GPU, but present() was never called.
+            // Return the image back to the presentation engine waiting on render_semaphore.
+            let _ = device.queue_present_raw(
+                self.swapchain,
+                self.image_index,
+                &[self.render_semaphore],
+            );
+        }
     }
 }

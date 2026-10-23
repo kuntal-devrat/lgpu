@@ -244,3 +244,129 @@ fn test_async_recorder_harvesting_during_submission() {
     // Verify device wait_idle also harvests everything without error
     device.wait_idle().expect("wait_idle failed");
 }
+
+#[test]
+fn test_unpresented_surface_texture_drop_recovery() {
+    let instance = match Instance::new() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
+    let (device, queue) = match adapters[0].request_device(&instance) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+
+    let mut surface = match instance.create_headless_surface() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let config = SurfaceConfiguration {
+        width: 640,
+        height: 480,
+        format: TextureFormat::Bgra8Unorm,
+        present_mode: PresentMode::Fifo,
+        usage: TextureUsage::RENDER_ATTACHMENT,
+    };
+    surface
+        .configure(&device, &config)
+        .expect("Configure failed");
+
+    // Acquire and drop SurfaceTexture repeatedly without calling present or submitting work.
+    // Without the Drop safety implementation, this would exhaust swapchain images and hang
+    // wait_for_fences/acquire_next_image on frame slot wraparound.
+    for _ in 0..6 {
+        let surface_texture = surface
+            .get_current_texture()
+            .expect("get_current_texture failed during unpresented drop loop");
+        drop(surface_texture);
+    }
+
+    // Verify normal render and submit still succeeds cleanly after dropped frames
+    let final_texture = surface
+        .get_current_texture()
+        .expect("Failed to acquire texture after drop loop");
+    let mut encoder = device
+        .create_command_encoder()
+        .expect("Create encoder failed");
+    encoder
+        .clear_and_render_texture(&final_texture.texture, [0.5, 0.5, 0.5, 1.0])
+        .expect("Clear failed");
+    let cmd = encoder.finish();
+    queue
+        .submit_surface(cmd, final_texture)
+        .expect("submit_surface failed after drop loop");
+
+    device.wait_idle().expect("wait_idle failed");
+}
+
+#[test]
+fn test_submitted_surface_work_dropped_without_present() {
+    let instance = match Instance::new() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
+    let (device, queue) = match adapters[0].request_device(&instance) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+
+    let mut surface = match instance.create_headless_surface() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let config = SurfaceConfiguration {
+        width: 640,
+        height: 480,
+        format: TextureFormat::Bgra8Unorm,
+        present_mode: PresentMode::Fifo,
+        usage: TextureUsage::RENDER_ATTACHMENT,
+    };
+    surface
+        .configure(&device, &config)
+        .expect("Configure failed");
+
+    // Acquire, submit work to GPU, but drop without calling .present()
+    let surface_texture = surface
+        .get_current_texture()
+        .expect("get_current_texture failed");
+    let mut encoder = device
+        .create_command_encoder()
+        .expect("Create encoder failed");
+    encoder
+        .clear_and_render_texture(&surface_texture.texture, [0.2, 0.4, 0.6, 1.0])
+        .expect("Clear failed");
+    let cmd = encoder.finish();
+
+    queue
+        .submit_surface_work(cmd, &surface_texture)
+        .expect("submit_surface_work failed");
+    // Dropped without calling surface_texture.present()
+    drop(surface_texture);
+
+    // Verify next frame can still be acquired, rendered, and presented cleanly
+    let next_texture = surface
+        .get_current_texture()
+        .expect("Failed to acquire next texture");
+    let mut next_encoder = device
+        .create_command_encoder()
+        .expect("Create next encoder failed");
+    next_encoder
+        .clear_and_render_texture(&next_texture.texture, [0.8, 0.2, 0.1, 1.0])
+        .expect("Clear failed");
+    let next_cmd = next_encoder.finish();
+    queue
+        .submit_surface(next_cmd, next_texture)
+        .expect("submit_surface failed");
+
+    device.wait_idle().expect("wait_idle failed");
+}

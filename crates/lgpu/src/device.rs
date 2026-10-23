@@ -455,6 +455,9 @@ impl Queue {
             surface_texture.render_semaphore,
             surface_texture.frame_fence,
         )?;
+        surface_texture
+            .submitted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
