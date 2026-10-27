@@ -178,7 +178,7 @@ fn test_draw_indexed_and_indirect() {
             &BufferDesc {
                 label: Some("index_buf"),
                 size: 16,
-                usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC,
+                usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
                 memory_location: MemoryLocation::CpuToGpu,
             },
             &indices,
@@ -192,7 +192,7 @@ fn test_draw_indexed_and_indirect() {
             &BufferDesc {
                 label: Some("indirect_buf"),
                 size: 16,
-                usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC,
+                usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
                 memory_location: MemoryLocation::CpuToGpu,
             },
             &indirect_cmd,

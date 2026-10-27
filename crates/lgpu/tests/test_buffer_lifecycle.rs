@@ -186,3 +186,80 @@ fn test_command_pool_and_fence_recycling() {
         "SUCCESS: 100 consecutive submissions executed with recycled command pools and fences."
     );
 }
+
+#[test]
+fn test_unowned_buffer_and_texture_drop_safety() {
+    let instance = match Instance::new() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
+    let (device, _) = match adapters[0].request_device(&instance) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+
+    // 1. Buffer owned vs unowned lifecycle
+    let desc = BufferDesc {
+        label: Some("SharedTestBuffer"),
+        size: 512,
+        usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+        memory_location: MemoryLocation::CpuToGpu,
+    };
+
+    let owned_buf = device.create_buffer(&desc).expect("create_buffer");
+    assert!(owned_buf.is_owned());
+    let buf_id = owned_buf.id().expect("bindless buffer id");
+
+    let unowned_buf = owned_buf.clone_unowned();
+    assert!(!unowned_buf.is_owned());
+    assert_eq!(unowned_buf.id(), Some(buf_id));
+
+    // Write through unowned clone
+    unowned_buf
+        .write_at(0, &[0x42, 0x43, 0x44, 0x45])
+        .expect("write_at");
+
+    // Drop unowned clone: must NOT destroy hal buffer or unregister slot
+    drop(unowned_buf);
+
+    let mut readback = [0u8; 4];
+    owned_buf.read_at(0, &mut readback).expect("read_at");
+    assert_eq!(readback, [0x42, 0x43, 0x44, 0x45]);
+    assert_eq!(owned_buf.id(), Some(buf_id));
+
+    // Drop owned buffer: cleans up properly
+    drop(owned_buf);
+
+    // 2. Texture owned vs unowned lifecycle
+    let tex_desc = lgpu::TextureDesc {
+        label: Some("SharedTestTexture"),
+        width: 16,
+        height: 16,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        format: lgpu::TextureFormat::Rgba8Unorm,
+        usage: lgpu::TextureUsage::TEXTURE_BINDING | lgpu::TextureUsage::STORAGE_BINDING,
+    };
+
+    let owned_tex = device.create_texture(&tex_desc).expect("create_texture");
+    assert!(owned_tex.is_owned());
+    let tex_id = owned_tex.id().expect("bindless texture id");
+    let storage_id = owned_tex.storage_id().expect("bindless storage id");
+
+    let unowned_tex = owned_tex.clone_unowned();
+    assert!(!unowned_tex.is_owned());
+    assert_eq!(unowned_tex.id(), Some(tex_id));
+    assert_eq!(unowned_tex.storage_id(), Some(storage_id));
+
+    // Drop unowned clone: must NOT destroy hal texture or unregister slots
+    drop(unowned_tex);
+
+    assert_eq!(owned_tex.id(), Some(tex_id));
+    assert_eq!(owned_tex.storage_id(), Some(storage_id));
+    drop(owned_tex);
+}

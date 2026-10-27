@@ -195,6 +195,27 @@ impl VulkanDevice {
         if !texture.owned {
             return;
         }
+
+        if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+            if ring.current_timeline_value > 0 {
+                let completed = unsafe {
+                    self.device
+                        .get_semaphore_counter_value(ring.timeline_semaphore)
+                        .unwrap_or(0)
+                };
+                if completed < ring.current_timeline_value {
+                    let sems = [ring.timeline_semaphore];
+                    let vals = [ring.current_timeline_value];
+                    let wait_info = vk::SemaphoreWaitInfo::default()
+                        .semaphores(&sems)
+                        .values(&vals);
+                    unsafe {
+                        let _ = self.device.wait_semaphores(&wait_info, u64::MAX);
+                    }
+                }
+            }
+        }
+
         unsafe {
             if texture.view != vk::ImageView::null() {
                 self.device.destroy_image_view(texture.view, None);

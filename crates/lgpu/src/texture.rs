@@ -9,6 +9,23 @@ pub struct TextureId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SamplerId(pub u32);
 
+pub(crate) struct TextureSlotGuard {
+    pub(crate) device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+    pub(crate) id: Option<TextureId>,
+    pub(crate) storage_id: Option<TextureId>,
+}
+
+impl Drop for TextureSlotGuard {
+    fn drop(&mut self) {
+        if let Some(tex_id) = self.id {
+            self.device.unregister_bindless_texture(tex_id.0);
+        }
+        if let Some(storage_id) = self.storage_id {
+            self.device.unregister_bindless_storage_image(storage_id.0);
+        }
+    }
+}
+
 pub struct Texture {
     pub(crate) hal_texture: Option<lgpu_hal::vulkan::VulkanTexture>,
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
@@ -17,6 +34,7 @@ pub struct Texture {
     pub format: TextureFormat,
     pub id: Option<TextureId>,
     pub storage_id: Option<TextureId>,
+    pub(crate) slot_guard: Option<Arc<TextureSlotGuard>>,
     pub owned: bool,
 }
 
@@ -33,10 +51,24 @@ impl std::fmt::Debug for Texture {
     }
 }
 
+pub(crate) struct SamplerSlotGuard {
+    pub(crate) device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+    pub(crate) id: Option<SamplerId>,
+}
+
+impl Drop for SamplerSlotGuard {
+    fn drop(&mut self) {
+        if let Some(sampler_id) = self.id {
+            self.device.unregister_bindless_sampler(sampler_id.0);
+        }
+    }
+}
+
 pub struct Sampler {
     pub(crate) hal_sampler: Option<lgpu_hal::vulkan::VulkanSampler>,
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
     pub id: Option<SamplerId>,
+    pub(crate) _slot_guard: Option<Arc<SamplerSlotGuard>>,
 }
 
 impl std::fmt::Debug for Sampler {
@@ -84,6 +116,7 @@ impl Texture {
             format: self.format,
             id: self.id,
             storage_id: self.storage_id,
+            slot_guard: self.slot_guard.clone(),
             owned: false,
         }
     }
@@ -98,13 +131,6 @@ impl Sampler {
 impl Drop for Texture {
     fn drop(&mut self) {
         if self.owned {
-            if let Some(tex_id) = self.id {
-                self.vulkan_device.unregister_bindless_texture(tex_id.0);
-            }
-            if let Some(storage_id) = self.storage_id {
-                self.vulkan_device
-                    .unregister_bindless_storage_image(storage_id.0);
-            }
             if let Some(tex) = self.hal_texture.take() {
                 self.vulkan_device.destroy_texture(tex);
             }
@@ -114,9 +140,6 @@ impl Drop for Texture {
 
 impl Drop for Sampler {
     fn drop(&mut self) {
-        if let Some(sampler_id) = self.id {
-            self.vulkan_device.unregister_bindless_sampler(sampler_id.0);
-        }
         if let Some(sampler) = self.hal_sampler.take() {
             self.vulkan_device.destroy_sampler(sampler);
         }

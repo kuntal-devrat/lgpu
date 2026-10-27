@@ -5,15 +5,33 @@ use crate::{BufferDesc, BufferUsage, HalError, MemoryLocation};
 use ash::vk;
 
 pub struct VulkanBuffer {
-    pub(crate) buffer: vk::Buffer,
-    pub(crate) memory: vk::DeviceMemory,
-    pub(crate) block_id: Option<usize>,
-    pub(crate) offset: u64,
-    pub(crate) size: u64,
-    pub(crate) allocated_size: u64,
-    pub(crate) mapped_ptr: Option<*mut u8>,
-    pub(crate) is_coherent: bool,
-    pub(crate) sync_lock: std::sync::Mutex<()>,
+    pub buffer: vk::Buffer,
+    pub memory: vk::DeviceMemory,
+    pub block_id: Option<usize>,
+    pub offset: u64,
+    pub size: u64,
+    pub allocated_size: u64,
+    pub mapped_ptr: Option<*mut u8>,
+    pub is_coherent: bool,
+    pub sync_lock: std::sync::Mutex<()>,
+    pub owned: bool,
+}
+
+impl VulkanBuffer {
+    pub fn clone_unowned(&self) -> Self {
+        Self {
+            buffer: self.buffer,
+            memory: self.memory,
+            block_id: self.block_id,
+            offset: self.offset,
+            size: self.size,
+            allocated_size: self.allocated_size,
+            mapped_ptr: self.mapped_ptr,
+            is_coherent: self.is_coherent,
+            sync_lock: std::sync::Mutex::new(()),
+            owned: false,
+        }
+    }
 }
 
 unsafe impl Send for VulkanBuffer {}
@@ -115,6 +133,7 @@ impl VulkanDevice {
             mapped_ptr: alloc.mapped_ptr,
             is_coherent: alloc.is_coherent,
             sync_lock: std::sync::Mutex::new(()),
+            owned: true,
         })
     }
 
@@ -203,6 +222,30 @@ impl VulkanDevice {
     }
 
     pub fn destroy_buffer(&self, mut buffer: VulkanBuffer) {
+        if !buffer.owned {
+            return;
+        }
+
+        if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+            if ring.current_timeline_value > 0 {
+                let completed = unsafe {
+                    self.device
+                        .get_semaphore_counter_value(ring.timeline_semaphore)
+                        .unwrap_or(0)
+                };
+                if completed < ring.current_timeline_value {
+                    let sems = [ring.timeline_semaphore];
+                    let vals = [ring.current_timeline_value];
+                    let wait_info = vk::SemaphoreWaitInfo::default()
+                        .semaphores(&sems)
+                        .values(&vals);
+                    unsafe {
+                        let _ = self.device.wait_semaphores(&wait_info, u64::MAX);
+                    }
+                }
+            }
+        }
+
         let _guard = buffer.sync_lock.lock().unwrap();
         unsafe {
             if buffer.block_id.is_none() && buffer.mapped_ptr.take().is_some() {

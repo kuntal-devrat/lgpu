@@ -1,7 +1,8 @@
 //! Integration tests verifying bindless storage image allocation, MRT draw operations, and device limits.
 
 use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, GraphicsPipelineDesc, Instance, MemoryLocation, TextureDesc,
+    TextureFormat, TextureUsage,
 };
 
 #[test]
@@ -173,9 +174,14 @@ fn test_multiple_render_targets_mrt() {
         .create_shader_spirv(TRIANGLE_SPV)
         .expect("Failed to create shader");
 
+    let desc_mrt = GraphicsPipelineDesc::new_mrt(
+        "vs_main",
+        "fs_main",
+        &[TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Unorm],
+    );
     let pipeline = device
-        .create_graphics_pipeline(&shader, "vs_main", "fs_main", TextureFormat::Rgba8Unorm)
-        .expect("Failed to create graphics pipeline");
+        .create_graphics_pipeline_with_desc(&shader, &desc_mrt)
+        .expect("Failed to create MRT graphics pipeline");
 
     let desc = TextureDesc {
         label: Some("MrtColor"),

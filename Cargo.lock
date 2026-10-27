@@ -623,6 +623,7 @@ version = "0.1.3"
 dependencies = [
  "bytemuck",
  "lgpu-hal",
+ "naga",
  "raw-window-handle",
  "thiserror 2.0.21",
  "tracing",

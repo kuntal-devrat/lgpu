@@ -215,6 +215,7 @@ impl VulkanDevice {
             vs_entry,
             fs_entry,
             color_format,
+            color_formats: Vec::new(),
             depth_format,
             depth_test,
             depth_write,
@@ -233,8 +234,6 @@ impl VulkanDevice {
         let heap = self.bindless_heap.as_ref().ok_or_else(|| {
             HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
         })?;
-
-        let vk_format = desc.color_format.to_vk();
 
         let vs_name = CString::new(desc.vs_entry).unwrap();
         let fs_name = CString::new(desc.fs_entry).unwrap();
@@ -287,29 +286,42 @@ impl VulkanDevice {
             .sample_shading_enable(false)
             .rasterization_samples(vk_samples);
 
-        let color_blend_attachment = if let Some(b) = desc.blend {
-            [vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(true)
-                .src_color_blend_factor(b.color.src_factor.to_vk())
-                .dst_color_blend_factor(b.color.dst_factor.to_vk())
-                .color_blend_op(b.color.operation.to_vk())
-                .src_alpha_blend_factor(b.alpha.src_factor.to_vk())
-                .dst_alpha_blend_factor(b.alpha.dst_factor.to_vk())
-                .alpha_blend_op(b.alpha.operation.to_vk())]
+        let effective_color_formats = if !desc.color_formats.is_empty() {
+            desc.color_formats.clone()
         } else {
-            [vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(false)]
+            vec![desc.color_format]
         };
+
+        let vk_color_formats: Vec<vk::Format> =
+            effective_color_formats.iter().map(|f| f.to_vk()).collect();
+
+        let color_blend_attachments: Vec<vk::PipelineColorBlendAttachmentState> = vk_color_formats
+            .iter()
+            .map(|_| {
+                if let Some(b) = desc.blend {
+                    vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        .blend_enable(true)
+                        .src_color_blend_factor(b.color.src_factor.to_vk())
+                        .dst_color_blend_factor(b.color.dst_factor.to_vk())
+                        .color_blend_op(b.color.operation.to_vk())
+                        .src_alpha_blend_factor(b.alpha.src_factor.to_vk())
+                        .dst_alpha_blend_factor(b.alpha.dst_factor.to_vk())
+                        .alpha_blend_op(b.alpha.operation.to_vk())
+                } else {
+                    vk::PipelineColorBlendAttachmentState::default()
+                        .color_write_mask(vk::ColorComponentFlags::RGBA)
+                        .blend_enable(false)
+                }
+            })
+            .collect();
 
         let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
-            .attachments(&color_blend_attachment);
+            .attachments(&color_blend_attachments);
 
-        let color_formats = [vk_format];
         let mut rendering_info =
-            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&vk_color_formats);
 
         let vk_depth_format = match desc.depth_format {
             Some(TextureFormat::Depth32Float) => Some(vk::Format::D32_SFLOAT),
