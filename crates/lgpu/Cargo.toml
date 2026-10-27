@@ -15,7 +15,7 @@ vulkan = ["lgpu-hal/vulkan"]
 wgsl = ["dep:naga"]
 
 [dependencies]
-lgpu-hal = { path = "../lgpu-hal", version = "0.1.3", default-features = false }
+lgpu-hal = { path = "../lgpu-hal", version = "0.1.4", default-features = false }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

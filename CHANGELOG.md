@@ -5,6 +5,26 @@ All notable changes to the `lgpu` workspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-10-27
+
+### Added
+- **Asynchronous Ring Staging Buffer**: 64 MiB host-visible, host-coherent persistent staging memory with linear suballocation and timeline semaphore synchronization, eliminating blocking `vkQueueWaitIdle()` on texture uploads.
+- **Vulkan 1.3 Synchronization2**: Replaced legacy pipeline barriers across command encoders with `vkCmdPipelineBarrier2` and `VkDependencyInfo`.
+- **Runtime WGSL Compilation**: Optional `Device::create_shader_wgsl()` powered by Naga under the `wgsl` Cargo feature flag (#3).
+- **Burst Upload & Resize Stress Testing**: Integration test validating 100 burst uploads/frame across rapid window resize cycles with zero driver crashes or memory leaks.
+
+### Changed
+- **Robust Frames-in-Flight Buffer**: Implemented triple buffering (`MAX_FRAMES_IN_FLIGHT = 3`) with CPU fence waits before command recording and per-swapchain-image render semaphores to strictly adhere to Vulkan presentation requirements.
+- **Buddy Memory Allocator**: Replaced naive vector sorting with a 64 MiB block power-of-two Buddy Allocator with $O(1)$ coalescing and warm block pooling, preventing driver `maxMemoryAllocationCount` limit crashes (#1, #13).
+- **Bulletproof Swapchain Reconfiguration**: Intercepts `VK_ERROR_OUT_OF_DATE_KHR`, `VK_SUBOPTIMAL_KHR`, `VK_NOT_READY`, passes `old_swapchain` during re-creation, and gracefully pauses rendering on zero-size minimized windows.
+
+### Fixed
+- **Bindless Descriptor Slot Guards**: Implemented `BufferSlotGuard`, `TextureSlotGuard`, and `SamplerSlotGuard` to ensure descriptor heap slots are recycled safely without leaks or double-frees (#14, #15).
+- **CI & Headless Test Stability**: Gracefully handle environments without physical Vulkan devices in bindless heap tests (#11, #12).
+- **Concurrent Submission Safety**: Enforced monotonic timeline semaphore signal ordering under concurrent multi-threaded queue submissions.
+
+---
+
 ## [0.1.3] - 2026-10-18
 
 ### Added

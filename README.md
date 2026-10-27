@@ -61,7 +61,7 @@ Add `lgpu` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-lgpu = "0.1.3"
+lgpu = "0.1.4"
 bytemuck = { version = "1.19", features = ["derive"] }
 ```
 
