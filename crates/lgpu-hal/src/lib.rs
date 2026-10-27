@@ -426,6 +426,7 @@ pub struct GraphicsPipelineDesc<'a> {
     pub vs_entry: &'a str,
     pub fs_entry: &'a str,
     pub color_format: TextureFormat,
+    pub color_formats: Vec<TextureFormat>,
     pub depth_format: Option<TextureFormat>,
     pub depth_test: bool,
     pub depth_write: bool,
@@ -441,6 +442,27 @@ impl<'a> GraphicsPipelineDesc<'a> {
             vs_entry,
             fs_entry,
             color_format,
+            color_formats: Vec::new(),
+            depth_format: None,
+            depth_test: false,
+            depth_write: false,
+            sample_count: 1,
+            primitive: PrimitiveState::default(),
+            blend: None,
+        }
+    }
+
+    pub fn new_mrt(vs_entry: &'a str, fs_entry: &'a str, color_formats: &[TextureFormat]) -> Self {
+        let first = color_formats
+            .first()
+            .copied()
+            .unwrap_or(TextureFormat::Rgba8Unorm);
+        Self {
+            label: None,
+            vs_entry,
+            fs_entry,
+            color_format: first,
+            color_formats: color_formats.to_vec(),
             depth_format: None,
             depth_test: false,
             depth_write: false,
@@ -473,4 +495,12 @@ pub enum HalError {
     InvalidParameter(String),
     #[error("Backend specific error: {0}")]
     BackendError(String),
+    #[error("Swapchain out of date: {0}")]
+    OutOfDate(String),
+    #[error("Swapchain suboptimal: {0}")]
+    Suboptimal(String),
+    #[error("Surface / swapchain not ready: {0}")]
+    NotReady(String),
+    #[error("Vulkan device lost: {0}")]
+    DeviceLost(String),
 }

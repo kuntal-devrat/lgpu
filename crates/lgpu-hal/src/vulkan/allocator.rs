@@ -1,13 +1,17 @@
-//! Simple Vulkan memory suballocator.
+//! Vulkan memory suballocator based on a segregated power-of-two Buddy Allocator.
 //!
-//! Suballocates small buffer and texture memory allocations from large contiguous
-//! blocks (32 MiB by default) to stay well within driver allocation limits.
+//! Suballocates buffer and texture memory allocations from large contiguous blocks
+//! (64 MiB by default) to stay well within driver allocation limits (e.g., maxMemoryAllocationCount = 4096).
+//! Provides O(1) allocation and O(1) coalescing deallocation without vector sorting overhead.
 
 use crate::HalError;
 use ash::vk;
+use std::collections::HashMap;
 
-pub const DEFAULT_BLOCK_SIZE: u64 = 32 * 1024 * 1024; // 32 MiB
-pub const SUBALLOCATION_THRESHOLD: u64 = 16 * 1024 * 1024; // 16 MiB
+pub const DEFAULT_BLOCK_SIZE: u64 = 64 * 1024 * 1024; // 64 MiB chunks
+pub const SUBALLOCATION_THRESHOLD: u64 = 32 * 1024 * 1024; // 32 MiB
+pub const MIN_CHUNK_SIZE: u64 = 256; // 256 bytes minimum chunk
+pub const NUM_ORDERS: usize = 19; // 256 B (order 0) to 64 MiB (order 18)
 
 /// Distinguishes linear resources (buffers) from non-linear resources (optimal textures)
 /// to respect Vulkan bufferImageGranularity rules and prevent memory aliasing.
@@ -35,60 +39,137 @@ pub struct MemoryBlock {
     pub allocation_type: AllocationType,
     pub mapped_base: Option<*mut u8>,
     pub is_coherent: bool,
-    pub free_chunks: Vec<(u64, u64)>, // (offset, size)
+    /// Free chunks segregated by power-of-two order (size = MIN_CHUNK_SIZE << order).
+    pub free_lists: Vec<Vec<u64>>,
+    /// Tracks active allocations: offset -> (order, allocated_size) to detect double free.
+    pub allocated_chunks: HashMap<u64, (usize, u64)>,
 }
 
 unsafe impl Send for MemoryBlock {}
 unsafe impl Sync for MemoryBlock {}
 
+#[inline]
+fn order_size(order: usize) -> u64 {
+    MIN_CHUNK_SIZE << order
+}
+
+#[inline]
+fn size_to_order(size: u64) -> usize {
+    let s = size.max(MIN_CHUNK_SIZE);
+    let chunks = (s + MIN_CHUNK_SIZE - 1) / MIN_CHUNK_SIZE;
+    let next_power = chunks.next_power_of_two();
+    next_power.trailing_zeros() as usize
+}
+
 impl MemoryBlock {
+    pub fn new(
+        id: usize,
+        memory: vk::DeviceMemory,
+        size: u64,
+        memory_type_index: u32,
+        is_host_visible: bool,
+        allocation_type: AllocationType,
+        mapped_base: Option<*mut u8>,
+        is_coherent: bool,
+    ) -> Self {
+        let max_order = size_to_order(size).min(NUM_ORDERS - 1);
+        let mut free_lists = vec![Vec::new(); NUM_ORDERS];
+        free_lists[max_order].push(0);
+
+        Self {
+            id,
+            memory,
+            size,
+            memory_type_index,
+            is_host_visible,
+            allocation_type,
+            mapped_base,
+            is_coherent,
+            free_lists,
+            allocated_chunks: HashMap::new(),
+        }
+    }
+
     pub fn allocate(&mut self, size: u64, alignment: u64) -> Option<u64> {
-        let align = alignment.max(1);
-        for i in 0..self.free_chunks.len() {
-            let (chunk_offset, chunk_size) = self.free_chunks[i];
-            let aligned_offset = if align.is_power_of_two() {
-                (chunk_offset + align - 1) & !(align - 1)
-            } else {
-                ((chunk_offset + align - 1) / align) * align
-            };
-            let padding = aligned_offset - chunk_offset;
-            if chunk_size >= padding + size {
-                // Remove chunk and insert pre/post gaps
-                self.free_chunks.remove(i);
-                if padding > 0 {
-                    self.free_chunks.push((chunk_offset, padding));
-                }
-                let remaining = chunk_size - (padding + size);
-                if remaining > 0 {
-                    self.free_chunks.push((aligned_offset + size, remaining));
-                }
-                self.free_chunks.sort_unstable_by_key(|&(off, _)| off);
-                return Some(aligned_offset);
+        let needed_size = size.max(alignment).max(MIN_CHUNK_SIZE);
+        let target_order = size_to_order(needed_size);
+        if target_order >= NUM_ORDERS {
+            return None;
+        }
+
+        // Find smallest order >= target_order with a free chunk
+        let mut found_order = None;
+        for order in target_order..NUM_ORDERS {
+            if !self.free_lists[order].is_empty() {
+                found_order = Some(order);
+                break;
             }
         }
-        None
+
+        let order = found_order?;
+        let offset = self.free_lists[order].pop().unwrap();
+
+        // Split chunk down to target_order
+        let mut current_order = order;
+        while current_order > target_order {
+            current_order -= 1;
+            let buddy_offset = offset + order_size(current_order);
+            self.free_lists[current_order].push(buddy_offset);
+        }
+
+        self.allocated_chunks.insert(offset, (target_order, size));
+
+        Some(offset)
     }
 
     pub fn free(&mut self, offset: u64, size: u64) {
-        self.free_chunks.push((offset, size));
-        self.free_chunks.sort_unstable_by_key(|&(off, _)| off);
+        // Look up the order either from tracked allocations or calculate from size
+        let order = if let Some((alloc_order, _)) = self.allocated_chunks.remove(&offset) {
+            alloc_order
+        } else {
+            // Already freed or untracked: compute order from size and verify
+            size_to_order(size).min(NUM_ORDERS - 1)
+        };
 
-        // Merge contiguous free chunks
-        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(self.free_chunks.len());
-        for chunk in &self.free_chunks {
-            if let Some(last) = merged.last_mut() {
-                if last.0 + last.1 == chunk.0 {
-                    last.1 += chunk.1;
-                    continue;
-                }
+        let mut curr_order = order;
+        let mut curr_offset = offset;
+
+        // Merge buddies recursively up to NUM_ORDERS - 1
+        while curr_order < NUM_ORDERS - 1 {
+            let chunk_sz = order_size(curr_order);
+            let buddy_offset = curr_offset ^ chunk_sz;
+
+            // Check if buddy is free in free_lists[curr_order]
+            if let Some(pos) = self.free_lists[curr_order]
+                .iter()
+                .position(|&off| off == buddy_offset)
+            {
+                // Remove buddy from free list and coalesce
+                self.free_lists[curr_order].swap_remove(pos);
+                curr_offset = curr_offset.min(buddy_offset);
+                curr_order += 1;
+            } else {
+                break;
             }
-            merged.push(*chunk);
         }
-        self.free_chunks = merged;
+
+        self.free_lists[curr_order].push(curr_offset);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.free_chunks.len() == 1 && self.free_chunks[0] == (0, self.size)
+        if !self.allocated_chunks.is_empty() {
+            return false;
+        }
+        let max_order = size_to_order(self.size).min(NUM_ORDERS - 1);
+        self.free_lists[max_order].len() == 1
+    }
+
+    pub fn free_bytes(&self) -> u64 {
+        let mut total = 0;
+        for (order, list) in self.free_lists.iter().enumerate() {
+            total += (list.len() as u64) * order_size(order);
+        }
+        total
     }
 }
 
@@ -194,17 +275,16 @@ impl VulkanSuballocator {
         let block_id = self.next_block_id;
         self.next_block_id += 1;
 
-        let mut block = MemoryBlock {
-            id: block_id,
+        let mut block = MemoryBlock::new(
+            block_id,
             memory,
-            size: block_size,
+            block_size,
             memory_type_index,
             is_host_visible,
             allocation_type,
             mapped_base,
             is_coherent,
-            free_chunks: vec![(0, block_size)],
-        };
+        );
 
         let offset = block
             .allocate(size, alignment)
@@ -305,10 +385,7 @@ impl VulkanSuballocator {
 
     /// Returns the total available free bytes across all managed blocks.
     pub fn total_free_bytes(&self) -> u64 {
-        self.blocks
-            .iter()
-            .map(|b| b.free_chunks.iter().map(|&(_, sz)| sz).sum::<u64>())
-            .sum()
+        self.blocks.iter().map(|b| b.free_bytes()).sum()
     }
 
     pub fn destroy(&mut self, device: &ash::Device) {

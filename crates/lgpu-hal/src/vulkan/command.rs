@@ -8,8 +8,8 @@ use crate::HalError;
 use ash::vk;
 
 pub struct VulkanCommandRecorder {
-    pub(crate) command_pool: vk::CommandPool,
-    pub(crate) command_buffer: vk::CommandBuffer,
+    pub command_pool: vk::CommandPool,
+    pub command_buffer: vk::CommandBuffer,
 }
 
 unsafe impl Send for VulkanCommandRecorder {}
@@ -68,6 +68,32 @@ impl VulkanDevice {
                     true
                 }
             });
+
+            if let Ok(mut ring_guard) = self.staging_ring.try_lock() {
+                if let Some(ref mut ring) = *ring_guard {
+                    let completed = unsafe {
+                        self.device
+                            .get_semaphore_counter_value(ring.timeline_semaphore)
+                            .unwrap_or(0)
+                    };
+                    ring.pending_recorders.retain_mut(|(val, r)| {
+                        if *val <= completed {
+                            unsafe {
+                                self.device
+                                    .reset_command_buffer(
+                                        r.command_buffer,
+                                        vk::CommandBufferResetFlags::empty(),
+                                    )
+                                    .ok();
+                            }
+                            cache.push((r.command_pool, r.command_buffer));
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+            }
         }
 
         let (command_pool, command_buffer) = match self.command_recorder_cache.lock().unwrap().pop()
@@ -281,34 +307,34 @@ impl VulkanDevice {
             let old_color_layout =
                 color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-            let (src_stage, src_access) = match old_color_layout {
+            let (src_stage2, src_access2) = match old_color_layout {
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 ),
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::AccessFlags::TRANSFER_READ,
+                    vk::PipelineStageFlags2::TRANSFER,
+                    vk::AccessFlags2::TRANSFER_READ,
                 ),
                 _ => (
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::AccessFlags::empty(),
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    vk::AccessFlags2::empty(),
                 ),
             };
 
-            let color_barrier_to_attach = vk::ImageMemoryBarrier::default()
+            let color_barrier_to_attach = vk::ImageMemoryBarrier2::default()
                 .old_layout(old_color_layout)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .src_stage_mask(src_stage2)
+                .src_access_mask(src_access2)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(color_texture.image)
-                .subresource_range(color_subresource)
-                .src_access_mask(src_access)
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                .subresource_range(color_subresource);
 
             let mut barriers = vec![color_barrier_to_attach];
-            let mut wait_dst_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
-            let mut total_src_stage = src_stage;
 
             let mut depth_attachment_val = None;
             if let Some((depth_texture, clear_depth)) = depth {
@@ -321,34 +347,34 @@ impl VulkanDevice {
 
                 let old_depth_layout =
                     depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
-                let (depth_src_stage, depth_src_access) = match old_depth_layout {
+                let (depth_src_stage2, depth_src_access2) = match old_depth_layout {
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let depth_barrier_to_attach = vk::ImageMemoryBarrier::default()
+                let depth_barrier_to_attach = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_depth_layout)
                     .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .src_stage_mask(depth_src_stage2)
+                    .src_access_mask(depth_src_access2)
+                    .dst_stage_mask(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS)
+                    .dst_access_mask(
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    )
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(depth_texture.image)
-                    .subresource_range(depth_subresource)
-                    .src_access_mask(depth_src_access)
-                    .dst_access_mask(
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                    );
+                    .subresource_range(depth_subresource);
 
                 barriers.push(depth_barrier_to_attach);
-                total_src_stage |= depth_src_stage;
-                wait_dst_stage |= vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS;
 
                 let depth_attachment = vk::RenderingAttachmentInfo::default()
                     .image_view(depth_texture.view)
@@ -364,15 +390,9 @@ impl VulkanDevice {
                 depth_attachment_val = Some(depth_attachment);
             }
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                total_src_stage,
-                wait_dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
+            let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
             let clear_value = vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -409,27 +429,26 @@ impl VulkanDevice {
                 .cmd_begin_rendering(recorder.command_buffer, &rendering_info);
             self.device.cmd_end_rendering(recorder.command_buffer);
 
-            let barrier_to_src = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(color_texture.image)
-                .subresource_range(color_subresource)
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+            if !color_texture.owned {
+                let barrier_to_post = vk::ImageMemoryBarrier2::default()
+                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+                    .dst_access_mask(vk::AccessFlags2::empty())
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(color_texture.image)
+                    .subresource_range(color_subresource);
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_src],
-            );
+                let post_barriers = [barrier_to_post];
+                let post_dep = vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
 
-            color_texture.transition_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+                color_texture.transition_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+            }
             if let Some((depth_texture, _)) = depth {
                 depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
             }
@@ -496,34 +515,34 @@ impl VulkanDevice {
             let old_color_layout =
                 color_texture.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-            let (src_stage, src_access) = match old_color_layout {
+            let (src_stage2, src_access2) = match old_color_layout {
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 ),
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::AccessFlags::TRANSFER_READ,
+                    vk::PipelineStageFlags2::TRANSFER,
+                    vk::AccessFlags2::TRANSFER_READ,
                 ),
                 _ => (
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::AccessFlags::empty(),
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    vk::AccessFlags2::empty(),
                 ),
             };
 
-            let color_barrier_to_attach = vk::ImageMemoryBarrier::default()
+            let color_barrier_to_attach = vk::ImageMemoryBarrier2::default()
                 .old_layout(old_color_layout)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .src_stage_mask(src_stage2)
+                .src_access_mask(src_access2)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(color_texture.image)
-                .subresource_range(color_subresource)
-                .src_access_mask(src_access)
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                .subresource_range(color_subresource);
 
             let mut barriers = vec![color_barrier_to_attach];
-            let mut total_src_stage = src_stage;
-            let mut wait_dst_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
 
             let mut depth_attachment_val = None;
             if let Some((depth_texture, depth_load_op)) = depth {
@@ -537,35 +556,37 @@ impl VulkanDevice {
                 let old_depth_layout =
                     depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
 
-                let (depth_src_stage, depth_src_access) = match old_depth_layout {
+                let (depth_src_stage2, depth_src_access2) = match old_depth_layout {
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let depth_barrier_to_attach = vk::ImageMemoryBarrier::default()
+                let depth_barrier_to_attach = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_depth_layout)
                     .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .src_stage_mask(depth_src_stage2)
+                    .src_access_mask(depth_src_access2)
+                    .dst_stage_mask(
+                        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                    )
+                    .dst_access_mask(
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    )
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(depth_texture.image)
-                    .subresource_range(depth_subresource)
-                    .src_access_mask(depth_src_access)
-                    .dst_access_mask(
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                    );
+                    .subresource_range(depth_subresource);
 
                 barriers.push(depth_barrier_to_attach);
-                total_src_stage |= depth_src_stage;
-                wait_dst_stage |= vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
 
                 let (depth_load_op_vk, clear_depth_val) = match depth_load_op {
                     crate::LoadOp::Clear(d) => (
@@ -592,15 +613,9 @@ impl VulkanDevice {
                 depth_attachment_val = Some(depth_attachment);
             }
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                total_src_stage,
-                wait_dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
+            let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
             let (color_load_op_vk, clear_color_value) = match color_load_op {
                 crate::LoadOp::Clear(c) => (
@@ -764,27 +779,26 @@ impl VulkanDevice {
 
             self.device.cmd_end_rendering(recorder.command_buffer);
 
-            let barrier_to_src = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(color_texture.image)
-                .subresource_range(color_subresource)
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+            if !color_texture.owned {
+                let barrier_to_post = vk::ImageMemoryBarrier2::default()
+                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+                    .dst_access_mask(vk::AccessFlags2::empty())
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(color_texture.image)
+                    .subresource_range(color_subresource);
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_src],
-            );
+                let post_barriers = [barrier_to_post];
+                let dep_info = vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
-            color_texture.transition_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+                color_texture.transition_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+            }
             if let Some((depth_texture, _)) = depth {
                 depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
             }
@@ -916,8 +930,6 @@ impl VulkanDevice {
 
         unsafe {
             let mut barriers = Vec::with_capacity(color_textures.len() + 1);
-            let mut total_src_stage = vk::PipelineStageFlags::empty();
-            let mut wait_dst_stage = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
             let mut color_subresources = Vec::with_capacity(color_textures.len());
 
             for tex in color_textures {
@@ -930,33 +942,34 @@ impl VulkanDevice {
                 color_subresources.push(subresource);
 
                 let old_layout = tex.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-                let (src_stage, src_access) = match old_layout {
+                let (src_stage2, src_access2) = match old_layout {
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     ),
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL => (
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::AccessFlags::TRANSFER_READ,
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::AccessFlags2::TRANSFER_READ,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let barrier = vk::ImageMemoryBarrier::default()
+                let barrier = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_layout)
                     .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .src_stage_mask(src_stage2)
+                    .src_access_mask(src_access2)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(tex.image)
-                    .subresource_range(subresource)
-                    .src_access_mask(src_access)
-                    .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                    .subresource_range(subresource);
 
                 barriers.push(barrier);
-                total_src_stage |= src_stage;
             }
 
             let mut depth_attachment_val = None;
@@ -970,35 +983,37 @@ impl VulkanDevice {
 
                 let old_depth_layout =
                     depth_tex.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
-                let (depth_src_stage, depth_src_access) = match old_depth_layout {
+                let (depth_src_stage2, depth_src_access2) = match old_depth_layout {
                     vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                            | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let depth_barrier = vk::ImageMemoryBarrier::default()
+                let depth_barrier = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_depth_layout)
                     .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .src_stage_mask(depth_src_stage2)
+                    .src_access_mask(depth_src_access2)
+                    .dst_stage_mask(
+                        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                    )
+                    .dst_access_mask(
+                        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                    )
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(depth_tex.image)
-                    .subresource_range(depth_subresource)
-                    .src_access_mask(depth_src_access)
-                    .dst_access_mask(
-                        vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                            | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                    );
+                    .subresource_range(depth_subresource);
 
                 barriers.push(depth_barrier);
-                total_src_stage |= depth_src_stage;
-                wait_dst_stage |= vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
 
                 let depth_attachment = vk::RenderingAttachmentInfo::default()
                     .image_view(depth_tex.view)
@@ -1014,15 +1029,9 @@ impl VulkanDevice {
                 depth_attachment_val = Some(depth_attachment);
             }
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                total_src_stage,
-                wait_dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
+            let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
             let clear_value = vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -1114,34 +1123,29 @@ impl VulkanDevice {
 
             self.device.cmd_end_rendering(recorder.command_buffer);
 
-            let post_barriers: Vec<vk::ImageMemoryBarrier> = color_textures
-                .iter()
-                .zip(color_subresources.iter())
-                .map(|(tex, &subres)| {
-                    vk::ImageMemoryBarrier::default()
+            let mut post_barriers = Vec::new();
+            for (tex, &subres) in color_textures.iter().zip(color_subresources.iter()) {
+                if !tex.owned {
+                    let barrier = vk::ImageMemoryBarrier2::default()
                         .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                        .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+                        .dst_access_mask(vk::AccessFlags2::empty())
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                         .image(tex.image)
-                        .subresource_range(subres)
-                        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                        .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-                })
-                .collect();
+                        .subresource_range(subres);
+                    post_barriers.push(barrier);
+                    tex.transition_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+                }
+            }
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &post_barriers,
-            );
-
-            for tex in color_textures {
-                tex.transition_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+            if !post_barriers.is_empty() {
+                let post_dep = vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
             }
         }
         Ok(())
@@ -1389,41 +1393,38 @@ impl VulkanDevice {
                     .base_array_layer(0)
                     .layer_count(1);
 
-                let (src_stage, src_access) = match old_layout {
+                let (src_stage2, src_access2) = match old_layout {
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     ),
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => (
-                        vk::PipelineStageFlags::FRAGMENT_SHADER
-                            | vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::AccessFlags::SHADER_READ,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER
+                            | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        vk::AccessFlags2::SHADER_READ,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let barrier_to_dst = vk::ImageMemoryBarrier::default()
+                let barrier_to_dst = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_layout)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_stage_mask(src_stage2)
+                    .src_access_mask(src_access2)
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(texture.image)
-                    .subresource_range(subresource_range)
-                    .src_access_mask(src_access)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+                    .subresource_range(subresource_range);
 
-                self.device.cmd_pipeline_barrier(
-                    recorder.command_buffer,
-                    src_stage,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier_to_dst],
-                );
+                let barriers = [barrier_to_dst];
+                let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
                 *lock = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
             }
@@ -1457,8 +1458,159 @@ impl VulkanDevice {
     }
 
     pub fn write_texture(&self, texture: &VulkanTexture, data: &[u8]) -> Result<(), HalError> {
+        let mut staging_guard = self.staging_ring.lock().unwrap();
+        if let Some(ref mut ring) = *staging_guard {
+            let data_len = data.len() as u64;
+            if data_len <= ring.capacity {
+                let (offset, aligned_size) = ring.suballocate(&self.device, data_len)?;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        ring.mapped_ptr.add(offset as usize),
+                        data.len(),
+                    );
+                }
+
+                let recorder = self.create_command_recorder()?;
+
+                unsafe {
+                    let subresource_range = vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(texture.mip_levels.max(1))
+                        .base_array_layer(0)
+                        .layer_count(1);
+
+                    let old_layout = texture.current_layout();
+                    let (src_stage2, src_access2) = match old_layout {
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => (
+                            vk::PipelineStageFlags2::FRAGMENT_SHADER
+                                | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                            vk::AccessFlags2::SHADER_READ,
+                        ),
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL => (
+                            vk::PipelineStageFlags2::TRANSFER,
+                            vk::AccessFlags2::TRANSFER_WRITE,
+                        ),
+                        _ => (
+                            vk::PipelineStageFlags2::TOP_OF_PIPE,
+                            vk::AccessFlags2::empty(),
+                        ),
+                    };
+
+                    let barrier_to_dst = vk::ImageMemoryBarrier2::default()
+                        .old_layout(old_layout)
+                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .src_stage_mask(src_stage2)
+                        .src_access_mask(src_access2)
+                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(texture.image)
+                        .subresource_range(subresource_range);
+
+                    let pre_barriers = [barrier_to_dst];
+                    let pre_dep =
+                        vk::DependencyInfo::default().image_memory_barriers(&pre_barriers);
+                    self.device
+                        .cmd_pipeline_barrier2(recorder.command_buffer, &pre_dep);
+
+                    let subresource_layers = vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(0)
+                        .base_array_layer(0)
+                        .layer_count(1);
+
+                    let copy_region = vk::BufferImageCopy::default()
+                        .buffer_offset(offset)
+                        .buffer_row_length(0)
+                        .buffer_image_height(0)
+                        .image_subresource(subresource_layers)
+                        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                        .image_extent(vk::Extent3D {
+                            width: texture.width,
+                            height: texture.height,
+                            depth: 1,
+                        });
+
+                    self.device.cmd_copy_buffer_to_image(
+                        recorder.command_buffer,
+                        ring.buffer,
+                        texture.image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[copy_region],
+                    );
+
+                    let barrier_to_read = vk::ImageMemoryBarrier2::default()
+                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(
+                            vk::PipelineStageFlags2::FRAGMENT_SHADER
+                                | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        )
+                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(texture.image)
+                        .subresource_range(subresource_range);
+
+                    let post_barriers = [barrier_to_read];
+                    let post_dep =
+                        vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
+                    self.device
+                        .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
+
+                    *texture.layout.lock().unwrap() = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+
+                    self.device
+                        .end_command_buffer(recorder.command_buffer)
+                        .map_err(|e| HalError::CommandError(e.to_string()))?;
+                }
+
+                // Submit asynchronously, signaling timeline semaphore
+                ring.current_timeline_value += 1;
+                let timeline_val = ring.current_timeline_value;
+
+                let cmd_buffers = [recorder.command_buffer];
+                let signal_sems = [ring.timeline_semaphore];
+                let signal_vals = [timeline_val];
+
+                let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+                    .signal_semaphore_values(&signal_vals);
+
+                let submit_info = vk::SubmitInfo::default()
+                    .command_buffers(&cmd_buffers)
+                    .signal_semaphores(&signal_sems)
+                    .push_next(&mut timeline_info);
+
+                {
+                    let queue = self.queue.lock().unwrap();
+                    unsafe {
+                        self.device
+                            .queue_submit(*queue, &[submit_info], vk::Fence::null())
+                            .map_err(|e| HalError::CommandError(e.to_string()))?;
+                    }
+                }
+
+                ring.pending_batches
+                    .push_back(super::staging::StagingBatch {
+                        offset,
+                        size: aligned_size,
+                        timeline_value: timeline_val,
+                    });
+                ring.pending_recorders.push((timeline_val, recorder));
+
+                return Ok(());
+            }
+        }
+        drop(staging_guard);
+
+        // Fallback for oversized uploads or if ring is uninitialized
         let staging_buf = self.create_buffer(&crate::BufferDesc {
-            label: Some("staging_texture_upload"),
+            label: Some("staging_texture_upload_fallback"),
             size: data.len() as u64,
             usage: crate::BufferUsage::TRANSFER_SRC,
             memory_location: crate::MemoryLocation::CpuToGpu,
@@ -1477,30 +1629,29 @@ impl VulkanDevice {
                 .base_array_layer(0)
                 .layer_count(1);
 
-            let barrier_to_read = vk::ImageMemoryBarrier::default()
+            let barrier_to_read = vk::ImageMemoryBarrier2::default()
                 .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER
+                        | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                )
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(texture.image)
-                .subresource_range(subresource_range)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                .subresource_range(subresource_range);
 
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_read],
-            );
+            let post_barriers = [barrier_to_read];
+            let post_dep = vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
             *texture.layout.lock().unwrap() = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         }
 
         self.submit_and_wait(recorder)?;
-        self.wait_idle()?;
         self.destroy_buffer(staging_buf);
 
         Ok(())
@@ -1524,36 +1675,33 @@ impl VulkanDevice {
                     .base_array_layer(0)
                     .layer_count(1);
 
-                let (src_stage, src_access) = match old_layout {
+                let (src_stage2, src_access2) = match old_layout {
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     ),
                     _ => (
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::AccessFlags::empty(),
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
                     ),
                 };
 
-                let barrier_to_src = vk::ImageMemoryBarrier::default()
+                let barrier_to_src = vk::ImageMemoryBarrier2::default()
                     .old_layout(old_layout)
                     .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .src_stage_mask(src_stage2)
+                    .src_access_mask(src_access2)
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(texture.image)
-                    .subresource_range(subresource_range)
-                    .src_access_mask(src_access)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+                    .subresource_range(subresource_range);
 
-                self.device.cmd_pipeline_barrier(
-                    recorder.command_buffer,
-                    src_stage,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier_to_src],
-                );
+                let barriers = [barrier_to_src];
+                let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
 
                 *lock = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
             }
@@ -1606,46 +1754,56 @@ impl VulkanDevice {
                 vk_cmd_buffers.push(r.command_buffer);
             }
 
-            let mut vk_wait_sems = Vec::with_capacity(wait_semaphores.len());
-            let mut vk_wait_values = Vec::with_capacity(wait_semaphores.len());
-            let mut vk_wait_stages = Vec::with_capacity(wait_semaphores.len());
+            let mut vk_wait_sems = Vec::with_capacity(wait_semaphores.len() + 1);
+            let mut vk_wait_values = Vec::with_capacity(wait_semaphores.len() + 1);
+            let mut vk_wait_stages = Vec::with_capacity(wait_semaphores.len() + 1);
             for (sem, val) in wait_semaphores {
                 vk_wait_sems.push(sem.semaphore);
                 vk_wait_values.push(*val);
                 vk_wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
             }
 
-            let next_val = self
-                .internal_frame_counter
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-                + 1;
+            if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+                if ring.current_timeline_value > 0 {
+                    vk_wait_sems.push(ring.timeline_semaphore);
+                    vk_wait_values.push(ring.current_timeline_value);
+                    vk_wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
+                }
+            }
+
             let mut vk_signal_sems = Vec::with_capacity(signal_semaphores.len() + 1);
             let mut vk_signal_values = Vec::with_capacity(signal_semaphores.len() + 1);
             for (sem, val) in signal_semaphores {
                 vk_signal_sems.push(sem.semaphore);
                 vk_signal_values.push(*val);
             }
-            vk_signal_sems.push(self.internal_frame_semaphore);
-            vk_signal_values.push(next_val);
-
-            let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-                .wait_semaphore_values(&vk_wait_values)
-                .signal_semaphore_values(&vk_signal_values);
-
-            let submit_info = vk::SubmitInfo::default()
-                .command_buffers(&vk_cmd_buffers)
-                .wait_semaphores(&vk_wait_sems)
-                .wait_dst_stage_mask(&vk_wait_stages)
-                .signal_semaphores(&vk_signal_sems)
-                .push_next(&mut timeline_info);
 
             let fence = sync_fence.unwrap_or(vk::Fence::null());
-            {
+            let next_val = {
                 let queue = self.queue.lock().unwrap();
+                let next_val = self
+                    .internal_frame_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                    + 1;
+                vk_signal_sems.push(self.internal_frame_semaphore);
+                vk_signal_values.push(next_val);
+
+                let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+                    .wait_semaphore_values(&vk_wait_values)
+                    .signal_semaphore_values(&vk_signal_values);
+
+                let submit_info = vk::SubmitInfo::default()
+                    .command_buffers(&vk_cmd_buffers)
+                    .wait_semaphores(&vk_wait_sems)
+                    .wait_dst_stage_mask(&vk_wait_stages)
+                    .signal_semaphores(&vk_signal_sems)
+                    .push_next(&mut timeline_info);
+
                 if let Err(e) = self.device.queue_submit(*queue, &[submit_info], fence) {
                     return Err(HalError::CommandError(e.to_string()));
                 }
-            }
+                next_val
+            };
 
             if let Some(f) = sync_fence {
                 let wait_res = self.device.wait_for_fences(&[f], true, u64::MAX);
@@ -1743,55 +1901,57 @@ impl VulkanDevice {
     }
 
     pub fn cmd_memory_barrier(&self, recorder: &VulkanCommandRecorder) {
-        let barrier = vk::MemoryBarrier::default()
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::SHADER_READ);
+        let barrier = vk::MemoryBarrier2::default()
+            .src_stage_mask(
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+                    | vk::PipelineStageFlags2::TRANSFER
+                    | vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            )
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::SHADER_WRITE)
+            .dst_stage_mask(
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+                    | vk::PipelineStageFlags2::TRANSFER
+                    | vk::PipelineStageFlags2::VERTEX_INPUT
+                    | vk::PipelineStageFlags2::DRAW_INDIRECT,
+            )
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::SHADER_READ);
+        let dep_info =
+            vk::DependencyInfo::default().memory_barriers(std::slice::from_ref(&barrier));
         unsafe {
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::VERTEX_INPUT
-                    | vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                &[barrier],
-                &[],
-                &[],
-            );
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
         }
     }
 
     pub fn cmd_buffer_barrier(&self, recorder: &VulkanCommandRecorder, buffer: &VulkanBuffer) {
-        let barrier = vk::BufferMemoryBarrier::default()
+        let barrier = vk::BufferMemoryBarrier2::default()
             .buffer(buffer.buffer)
             .offset(0)
             .size(buffer.size)
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::TRANSFER_WRITE)
+            .src_stage_mask(
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+                    | vk::PipelineStageFlags2::TRANSFER
+                    | vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            )
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+                    | vk::PipelineStageFlags2::TRANSFER
+                    | vk::PipelineStageFlags2::VERTEX_INPUT
+                    | vk::PipelineStageFlags2::HOST,
+            )
             .dst_access_mask(
-                vk::AccessFlags::SHADER_READ
-                    | vk::AccessFlags::TRANSFER_READ
-                    | vk::AccessFlags::HOST_READ,
+                vk::AccessFlags2::SHADER_READ
+                    | vk::AccessFlags2::TRANSFER_READ
+                    | vk::AccessFlags2::HOST_READ,
             )
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED);
+        let dep_info =
+            vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&barrier));
         unsafe {
-            self.device.cmd_pipeline_barrier(
-                recorder.command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::VERTEX_INPUT
-                    | vk::PipelineStageFlags::HOST,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[barrier],
-                &[],
-            );
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
         }
     }
 }

@@ -393,3 +393,46 @@ fn test_concurrent_multithreaded_safety() {
         h.join().expect("thread panicked");
     }
 }
+
+#[cfg(feature = "wgsl")]
+#[test]
+fn test_create_shader_wgsl() {
+    let instance = Instance::new().expect("Instance::new");
+    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
+    if adapters.is_empty() {
+        return;
+    }
+    let (device, _queue) = adapters[0]
+        .request_device(&instance)
+        .expect("request_device");
+
+    let wgsl_src = r#"
+        @vertex
+        fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
+            var pos = array<vec2<f32>, 3>(
+                vec2<f32>(0.0, 0.5),
+                vec2<f32>(-0.5, -0.5),
+                vec2<f32>(0.5, -0.5)
+            );
+            return vec4<f32>(pos[in_vertex_index], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> @location(0) vec4<f32> {
+            return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+        }
+    "#;
+
+    let shader = device.create_shader_wgsl(wgsl_src);
+    assert!(
+        shader.is_ok(),
+        "create_shader_wgsl should succeed: {shader:?}"
+    );
+
+    let invalid_wgsl = "invalid wgsl syntax !!!";
+    let err_shader = device.create_shader_wgsl(invalid_wgsl);
+    assert!(
+        err_shader.is_err(),
+        "create_shader_wgsl with invalid syntax should fail"
+    );
+}

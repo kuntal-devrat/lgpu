@@ -1,6 +1,6 @@
 //! Vulkan instance, physical device adapters, and surface creation.
 
-use ash::ext::{headless_surface, metal_surface};
+use ash::ext::{debug_utils, headless_surface, metal_surface};
 use ash::khr::{surface, swapchain, wayland_surface, win32_surface, xcb_surface, xlib_surface};
 use ash::vk;
 use std::ffi::CString;
@@ -8,11 +8,38 @@ use std::ffi::CString;
 use super::{allocator, bindless, VulkanDevice};
 use crate::{AdapterInfo, Backend, DeviceType, HalError};
 
+unsafe extern "system" fn vulkan_debug_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _p_user_data: *mut std::ffi::c_void,
+) -> vk::Bool32 {
+    let message = if !p_callback_data.is_null() && !(*p_callback_data).p_message.is_null() {
+        std::ffi::CStr::from_ptr((*p_callback_data).p_message).to_string_lossy()
+    } else {
+        std::borrow::Cow::Borrowed("Unknown Vulkan debug message")
+    };
+
+    if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+        tracing::error!("[Vulkan Validation ERROR]: {message}");
+        eprintln!("[Vulkan Validation ERROR]: {message}");
+        panic!("[Vulkan Validation ERROR]: {message}");
+    } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+        tracing::warn!("[Vulkan Validation WARNING]: {message}");
+        eprintln!("[Vulkan Validation WARNING]: {message}");
+    } else {
+        tracing::info!("[Vulkan Validation INFO]: {message}");
+    }
+    vk::FALSE
+}
+
 pub struct VulkanInstance {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
     pub surface_loader: Option<surface::Instance>,
     pub has_headless_surface: bool,
+    pub debug_utils: Option<debug_utils::Instance>,
+    pub debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 pub struct VulkanAdapter {
@@ -84,10 +111,30 @@ impl VulkanInstance {
             }
         }
 
+        let mut enabled_layers = Vec::new();
+        #[cfg(debug_assertions)]
+        {
+            let available_layers = unsafe {
+                entry
+                    .enumerate_instance_layer_properties()
+                    .unwrap_or_default()
+            };
+            let validation_layer = c"VK_LAYER_KHRONOS_validation";
+            if available_layers.iter().any(|layer| unsafe {
+                std::ffi::CStr::from_ptr(layer.layer_name.as_ptr()) == validation_layer
+            }) {
+                enabled_layers.push(validation_layer.as_ptr());
+                if is_ext_supported(debug_utils::NAME) {
+                    enabled_extensions.push(debug_utils::NAME.as_ptr());
+                }
+            }
+        }
+
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&app_info)
             .flags(flags)
-            .enabled_extension_names(&enabled_extensions);
+            .enabled_extension_names(&enabled_extensions)
+            .enabled_layer_names(&enabled_layers);
 
         let instance = unsafe {
             entry.create_instance(&create_info, None).map_err(|e| {
@@ -101,11 +148,41 @@ impl VulkanInstance {
             None
         };
 
+        #[cfg(debug_assertions)]
+        let (debug_utils, debug_messenger) =
+            if is_ext_supported(debug_utils::NAME) && !enabled_layers.is_empty() {
+                let loader = debug_utils::Instance::new(&entry, &instance);
+                let messenger_ci = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                    .message_severity(
+                        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                    )
+                    .message_type(
+                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    )
+                    .pfn_user_callback(Some(vulkan_debug_callback));
+
+                let messenger = unsafe {
+                    loader
+                        .create_debug_utils_messenger(&messenger_ci, None)
+                        .ok()
+                };
+                (Some(loader), messenger)
+            } else {
+                (None, None)
+            };
+        #[cfg(not(debug_assertions))]
+        let (debug_utils, debug_messenger) = (None, None);
+
         Ok(Self {
             entry,
             instance,
             surface_loader,
             has_headless_surface,
+            debug_utils,
+            debug_messenger,
         })
     }
 
@@ -375,8 +452,10 @@ impl VulkanInstance {
             .descriptor_indexing(true)
             .shader_sampled_image_array_non_uniform_indexing(true)
             .shader_storage_buffer_array_non_uniform_indexing(true)
+            .shader_storage_image_array_non_uniform_indexing(true)
             .descriptor_binding_sampled_image_update_after_bind(true)
             .descriptor_binding_storage_buffer_update_after_bind(true)
+            .descriptor_binding_storage_image_update_after_bind(true)
             .descriptor_binding_partially_bound(true)
             .runtime_descriptor_array(true);
 
@@ -468,6 +547,13 @@ impl VulkanInstance {
                 })?
         };
 
+        let staging_ring = super::staging::VulkanStagingRing::new(
+            &device,
+            &adapter.memory_properties,
+            super::staging::DEFAULT_STAGING_RING_SIZE,
+        )
+        .ok();
+
         Ok(VulkanDevice {
             device,
             physical_device: adapter.physical_device,
@@ -483,6 +569,7 @@ impl VulkanInstance {
             internal_frame_counter: std::sync::atomic::AtomicU64::new(0),
             pending_async_recorders: std::sync::Mutex::new(Vec::new()),
             allocator: std::sync::Mutex::new(allocator::VulkanSuballocator::new()),
+            staging_ring: std::sync::Mutex::new(staging_ring),
             pipeline_cache,
         })
     }
@@ -497,6 +584,11 @@ impl VulkanAdapter {
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
         unsafe {
+            if let Some(messenger) = self.debug_messenger.take() {
+                if let Some(loader) = &self.debug_utils {
+                    loader.destroy_debug_utils_messenger(messenger, None);
+                }
+            }
             self.instance.destroy_instance(None);
         }
     }

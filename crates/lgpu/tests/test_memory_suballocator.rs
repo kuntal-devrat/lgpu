@@ -146,9 +146,8 @@ fn test_suballocator_block_reclamation_and_trim() {
 
     assert_eq!(device.suballocator_block_count(), 0);
 
-    // Each buffer is 10 MiB (< SUBALLOCATION_THRESHOLD of 16 MiB), so it will be suballocated.
-    // In a 32 MiB DEFAULT_BLOCK_SIZE, only 3 buffers fit per block.
-    // Allocating 8 buffers forces at least 3 distinct 32 MiB blocks to be allocated.
+    // Each buffer is 10 MiB (< SUBALLOCATION_THRESHOLD of 32 MiB), so it will be suballocated.
+    // In a 64 MiB DEFAULT_BLOCK_SIZE, 12 buffers force at least 3 distinct 64 MiB blocks.
     const CHUNK_SIZE: u64 = 10 * 1024 * 1024;
     let desc = BufferDesc {
         label: Some("LargeSuballocBuffer"),
@@ -158,7 +157,7 @@ fn test_suballocator_block_reclamation_and_trim() {
     };
 
     let mut buffers = Vec::new();
-    for i in 0..8 {
+    for i in 0..12 {
         let b = device.create_buffer(&desc).expect("buffer creation failed");
         b.write_at(0, &[(i as u8) + 1]).expect("write failed");
         buffers.push(b);

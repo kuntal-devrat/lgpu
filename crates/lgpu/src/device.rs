@@ -1,9 +1,9 @@
 //! Logical GPU device and queue submission.
 
 use crate::{
-    BindlessComputePipeline, Buffer, BufferDesc, BufferId, CommandBuffer, CommandEncoder,
-    ComputePipeline, Error, GraphicsPipeline, Sampler, SamplerDesc, SamplerId, Shader,
-    SurfaceTexture, Texture, TextureDesc, TextureFormat, TextureId, TextureUsage,
+    BindlessComputePipeline, Buffer, BufferDesc, BufferId, BufferUsage, CommandBuffer,
+    CommandEncoder, ComputePipeline, Error, GraphicsPipeline, Sampler, SamplerDesc, SamplerId,
+    Shader, SurfaceTexture, Texture, TextureDesc, TextureFormat, TextureId, TextureUsage,
     TimelineSemaphore,
 };
 use std::sync::Arc;
@@ -74,10 +74,21 @@ impl Device {
     /// ```
     pub fn create_buffer(&self, desc: &BufferDesc) -> Result<Buffer, Error> {
         let hal_buffer = self.vulkan_device.create_buffer(desc)?;
-        let id = if self.vulkan_device.bindless_heap.is_some() {
+        let id = if desc.usage.contains(BufferUsage::STORAGE)
+            && self.vulkan_device.bindless_heap.is_some()
+        {
             Some(BufferId(
                 self.vulkan_device.register_bindless_buffer(&hal_buffer)?,
             ))
+        } else {
+            None
+        };
+
+        let slot_guard = if id.is_some() {
+            Some(Arc::new(crate::buffer::BufferSlotGuard {
+                device: Arc::clone(&self.vulkan_device),
+                id,
+            }))
         } else {
             None
         };
@@ -87,6 +98,8 @@ impl Device {
             vulkan_device: Arc::clone(&self.vulkan_device),
             size: desc.size,
             id,
+            slot_guard,
+            owned: true,
         })
     }
 
@@ -146,6 +159,42 @@ impl Device {
             hal_shader: Some(hal_shader),
             vulkan_device: Arc::clone(&self.vulkan_device),
         })
+    }
+
+    #[cfg(feature = "wgsl")]
+    /// Compiles a WGSL shader string into a GPU Shader module at runtime.
+    pub fn create_shader_wgsl(&self, source: &str) -> Result<Shader, Error> {
+        let mut frontend = naga::front::wgsl::Frontend::new();
+        let module = frontend.parse(source).map_err(|e| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                "WGSL parse error: {e:?}"
+            )))
+        })?;
+
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+
+        let info = validator.validate(&module).map_err(|e| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                "WGSL validation error: {e:?}"
+            )))
+        })?;
+
+        let options = naga::back::spv::Options {
+            lang_version: (1, 3),
+            ..Default::default()
+        };
+
+        let spv_words =
+            naga::back::spv::write_vec(&module, &info, &options, None).map_err(|e| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                    "SPIR-V generation error: {e:?}"
+                )))
+            })?;
+
+        self.create_shader_spirv(&spv_words)
     }
 
     pub fn create_compute_pipeline(
@@ -223,6 +272,16 @@ impl Device {
         } else {
             None
         };
+        let slot_guard = if id.is_some() || storage_id.is_some() {
+            Some(Arc::new(crate::texture::TextureSlotGuard {
+                device: Arc::clone(&self.vulkan_device),
+                id,
+                storage_id,
+            }))
+        } else {
+            None
+        };
+
         Ok(Texture {
             hal_texture: Some(hal_texture),
             vulkan_device: Arc::clone(&self.vulkan_device),
@@ -231,6 +290,7 @@ impl Device {
             format: desc.format,
             id,
             storage_id,
+            slot_guard,
             owned: true,
         })
     }
@@ -244,10 +304,19 @@ impl Device {
         } else {
             None
         };
+        let slot_guard = if id.is_some() {
+            Some(Arc::new(crate::texture::SamplerSlotGuard {
+                device: Arc::clone(&self.vulkan_device),
+                id,
+            }))
+        } else {
+            None
+        };
         Ok(Sampler {
             hal_sampler: Some(hal_sampler),
             vulkan_device: Arc::clone(&self.vulkan_device),
             id,
+            _slot_guard: slot_guard,
         })
     }
 
@@ -436,9 +505,13 @@ impl Queue {
     /// queue.submit(cmd).expect("GPU submission failed");
     /// # }
     /// ```
-    pub fn submit(&self, command_buffer: CommandBuffer) -> Result<(), Error> {
-        self.vulkan_device
-            .submit_and_wait(command_buffer.recorder)?;
+    pub fn submit(&self, mut command_buffer: CommandBuffer) -> Result<(), Error> {
+        let recorder = command_buffer.recorder.take().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "CommandBuffer already consumed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.submit_and_wait(recorder)?;
         Ok(())
     }
 
@@ -446,11 +519,16 @@ impl Queue {
     /// The acquired surface can then be presented explicitly via [`SurfaceTexture::present`].
     pub fn submit_surface_work(
         &self,
-        command_buffer: CommandBuffer,
+        mut command_buffer: CommandBuffer,
         surface_texture: &SurfaceTexture,
     ) -> Result<(), Error> {
+        let recorder = command_buffer.recorder.take().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "CommandBuffer already consumed".to_string(),
+            ))
+        })?;
         self.vulkan_device.submit_for_surface(
-            command_buffer.recorder,
+            recorder,
             surface_texture.acquire_semaphore,
             surface_texture.render_semaphore,
             surface_texture.frame_fence,
@@ -471,8 +549,16 @@ impl Queue {
         surface_texture.present(self)
     }
 
-    pub fn submit_batches(&self, command_buffers: Vec<CommandBuffer>) -> Result<(), Error> {
-        let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
+    pub fn submit_batches(&self, mut command_buffers: Vec<CommandBuffer>) -> Result<(), Error> {
+        let mut recorders = Vec::with_capacity(command_buffers.len());
+        for cb in &mut command_buffers {
+            let r = cb.recorder.take().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "CommandBuffer already consumed".to_string(),
+                ))
+            })?;
+            recorders.push(r);
+        }
         self.vulkan_device.submit_batches_and_wait(recorders)?;
         Ok(())
     }
@@ -488,11 +574,19 @@ impl Queue {
 
     pub fn submit_batches_async(
         &self,
-        command_buffers: Vec<CommandBuffer>,
+        mut command_buffers: Vec<CommandBuffer>,
         wait_semaphores: &[(&TimelineSemaphore, u64)],
         signal_semaphores: &[(&TimelineSemaphore, u64)],
     ) -> Result<(), Error> {
-        let recorders = command_buffers.into_iter().map(|cb| cb.recorder).collect();
+        let mut recorders = Vec::with_capacity(command_buffers.len());
+        for cb in &mut command_buffers {
+            let r = cb.recorder.take().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "CommandBuffer already consumed".to_string(),
+                ))
+            })?;
+            recorders.push(r);
+        }
         let mut raw_wait = Vec::with_capacity(wait_semaphores.len());
         for (s, v) in wait_semaphores {
             let sem = s.hal_semaphore.as_ref().ok_or_else(|| {

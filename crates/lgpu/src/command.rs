@@ -10,7 +10,16 @@ pub struct CommandEncoder {
 }
 
 pub struct CommandBuffer {
-    pub(crate) recorder: lgpu_hal::vulkan::VulkanCommandRecorder,
+    pub(crate) recorder: Option<lgpu_hal::vulkan::VulkanCommandRecorder>,
+    pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+}
+
+impl Drop for CommandBuffer {
+    fn drop(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            self.vulkan_device.recycle_command_recorder(recorder);
+        }
+    }
 }
 
 impl CommandEncoder {
@@ -592,7 +601,11 @@ impl CommandEncoder {
             .recorder
             .take()
             .expect("CommandEncoder has already been finished or recorder missing");
-        CommandBuffer { recorder }
+        let vulkan_device = Arc::clone(&self.vulkan_device);
+        CommandBuffer {
+            recorder: Some(recorder),
+            vulkan_device,
+        }
     }
 
     /// Begins a scoped [`RenderPass`] for executing one or more draw calls with customizable load/store ops.

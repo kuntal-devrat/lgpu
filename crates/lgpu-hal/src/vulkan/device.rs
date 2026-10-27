@@ -1,6 +1,6 @@
 //! Vulkan logical device and execution context.
 
-use super::{allocator, bindless, VulkanCommandRecorder};
+use super::{allocator, bindless, staging, VulkanCommandRecorder};
 use crate::HalError;
 use ash::vk;
 
@@ -19,6 +19,7 @@ pub struct VulkanDevice {
     pub internal_frame_counter: std::sync::atomic::AtomicU64,
     pub pending_async_recorders: std::sync::Mutex<Vec<(u64, Vec<VulkanCommandRecorder>)>>,
     pub allocator: std::sync::Mutex<allocator::VulkanSuballocator>,
+    pub staging_ring: std::sync::Mutex<Option<staging::VulkanStagingRing>>,
     pub pipeline_cache: vk::PipelineCache,
 }
 
@@ -116,6 +117,9 @@ impl Drop for VulkanDevice {
             }
             for fence in self.fence_cache.lock().unwrap().drain(..) {
                 self.device.destroy_fence(fence, None);
+            }
+            if let Some(mut ring) = self.staging_ring.lock().unwrap().take() {
+                ring.destroy(&self.device);
             }
             self.allocator.lock().unwrap().destroy(&self.device);
             self.device

@@ -29,6 +29,12 @@ impl VulkanDevice {
             HalError::BackendError("VK_KHR_swapchain is not supported or not enabled".to_string())
         })?;
 
+        if width == 0 || height == 0 {
+            return Err(HalError::NotReady(
+                "Window extent is zero (minimized)".to_string(),
+            ));
+        }
+
         let caps = unsafe {
             surface_loader
                 .get_physical_device_surface_capabilities(self.physical_device, surface)
@@ -198,15 +204,32 @@ impl VulkanDevice {
             .swapchain_loader
             .as_ref()
             .ok_or_else(|| HalError::BackendError("VK_KHR_swapchain is not enabled".to_string()))?;
-        unsafe {
-            loader
-                .acquire_next_image(
-                    swapchain.swapchain,
-                    timeout_nanos,
-                    semaphore,
-                    vk::Fence::null(),
-                )
-                .map_err(|e| HalError::BackendError(format!("acquire_next_image failed: {e}")))
+        let res = unsafe {
+            loader.acquire_next_image(
+                swapchain.swapchain,
+                timeout_nanos,
+                semaphore,
+                vk::Fence::null(),
+            )
+        };
+        match res {
+            Ok((idx, suboptimal)) => Ok((idx, suboptimal)),
+            Err(vk::Result::SUBOPTIMAL_KHR) => Ok((0, true)),
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(HalError::OutOfDate(
+                "acquire_next_image returned VK_ERROR_OUT_OF_DATE_KHR".to_string(),
+            )),
+            Err(vk::Result::NOT_READY) => Err(HalError::NotReady(
+                "acquire_next_image returned VK_NOT_READY".to_string(),
+            )),
+            Err(vk::Result::TIMEOUT) => Err(HalError::NotReady(
+                "acquire_next_image returned VK_TIMEOUT".to_string(),
+            )),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(HalError::DeviceLost(
+                "acquire_next_image returned VK_ERROR_DEVICE_LOST".to_string(),
+            )),
+            Err(e) => Err(HalError::BackendError(format!(
+                "acquire_next_image failed: {e}"
+            ))),
         }
     }
 
@@ -238,10 +261,20 @@ impl VulkanDevice {
             .image_indices(&image_indices);
 
         let queue = self.queue.lock().unwrap();
-        unsafe {
-            loader
-                .queue_present(*queue, &present_info)
-                .map_err(|e| HalError::BackendError(format!("queue_present failed: {e}")))
+        let res = unsafe { loader.queue_present(*queue, &present_info) };
+        match res {
+            Ok(suboptimal) => Ok(suboptimal),
+            Err(vk::Result::SUBOPTIMAL_KHR) => Ok(true),
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(HalError::OutOfDate(
+                "queue_present returned VK_ERROR_OUT_OF_DATE_KHR".to_string(),
+            )),
+            Err(vk::Result::NOT_READY) => Err(HalError::NotReady(
+                "queue_present returned VK_NOT_READY".to_string(),
+            )),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(HalError::DeviceLost(
+                "queue_present returned VK_ERROR_DEVICE_LOST".to_string(),
+            )),
+            Err(e) => Err(HalError::BackendError(format!("queue_present failed: {e}"))),
         }
     }
 
@@ -308,35 +341,47 @@ impl VulkanDevice {
                 .map_err(|e| HalError::CommandError(e.to_string()))?;
 
             let cmd_buffers = [recorder.command_buffer];
-            let wait_sems = [wait_semaphore];
-            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-            let wait_values = [0u64];
+            let mut wait_sems = vec![wait_semaphore];
+            let mut wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let mut wait_values = vec![0u64];
 
-            let next_val = self
-                .internal_frame_counter
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-                + 1;
-            let signal_sems = [signal_semaphore, self.internal_frame_semaphore];
-            let signal_values = [0u64, next_val];
-
-            let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-                .wait_semaphore_values(&wait_values)
-                .signal_semaphore_values(&signal_values);
-
-            let submit_info = vk::SubmitInfo::default()
-                .command_buffers(&cmd_buffers)
-                .wait_semaphores(&wait_sems)
-                .wait_dst_stage_mask(&wait_stages)
-                .signal_semaphores(&signal_sems)
-                .push_next(&mut timeline_info);
+            if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+                if ring.current_timeline_value > 0 {
+                    wait_sems.push(ring.timeline_semaphore);
+                    wait_stages.push(
+                        vk::PipelineStageFlags::FRAGMENT_SHADER
+                            | vk::PipelineStageFlags::COMPUTE_SHADER,
+                    );
+                    wait_values.push(ring.current_timeline_value);
+                }
+            }
 
             let raw_fence = fence.unwrap_or(vk::Fence::null());
-            {
+            let next_val = {
                 let queue = self.queue.lock().unwrap();
+                let next_val = self
+                    .internal_frame_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+                    + 1;
+                let signal_sems = [signal_semaphore, self.internal_frame_semaphore];
+                let signal_values = [0u64, next_val];
+
+                let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
+                    .wait_semaphore_values(&wait_values)
+                    .signal_semaphore_values(&signal_values);
+
+                let submit_info = vk::SubmitInfo::default()
+                    .command_buffers(&cmd_buffers)
+                    .wait_semaphores(&wait_sems)
+                    .wait_dst_stage_mask(&wait_stages)
+                    .signal_semaphores(&signal_sems)
+                    .push_next(&mut timeline_info);
+
                 self.device
                     .queue_submit(*queue, &[submit_info], raw_fence)
                     .map_err(|e| HalError::CommandError(e.to_string()))?;
-            }
+                next_val
+            };
 
             self.pending_async_recorders
                 .lock()
