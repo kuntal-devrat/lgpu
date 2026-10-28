@@ -2,15 +2,29 @@
 
 use lgpu::{BufferDesc, BufferUsage, Instance, MemoryLocation, TextureFormat};
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_buffer_initialization_slice_and_bytes() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let desc = BufferDesc {
         label: Some("InitTestBuffer"),
@@ -43,13 +57,7 @@ fn test_buffer_initialization_slice_and_bytes() {
 
 #[test]
 fn test_graphics_pipeline_lifecycle() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     const TRIANGLE_SPV: &[u32] = &[
         119734787, 65536, 28, 67, 0, 131089, 1, 393227, 1, 1280527431, 1685353262, 808793134, 0,
@@ -90,11 +98,20 @@ fn test_graphics_pipeline_lifecycle() {
 
 #[test]
 fn test_adapter_feature_detection_and_device_creation() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    assert!(!adapters.is_empty());
+    let instance = match Instance::new() {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("Skipping test: Vulkan instance creation failed ({e})");
+            return;
+        }
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => {
+            eprintln!("Skipping test: No Vulkan adapters available");
+            return;
+        }
+    };
 
     for adapter in &adapters {
         let info = adapter.info();

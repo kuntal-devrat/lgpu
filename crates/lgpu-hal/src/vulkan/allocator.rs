@@ -107,7 +107,7 @@ impl MemoryBlock {
         }
 
         let order = found_order?;
-        let offset = self.free_lists[order].pop().unwrap();
+        let offset = self.free_lists[order].pop()?;
 
         // Split chunk down to target_order
         let mut current_order = order;
@@ -286,9 +286,9 @@ impl VulkanSuballocator {
             is_coherent,
         );
 
-        let offset = block
-            .allocate(size, alignment)
-            .expect("Fresh block must have sufficient space for allocation");
+        let offset = block.allocate(size, alignment).ok_or_else(|| {
+            HalError::OutOfMemory("Failed to suballocate from fresh memory block".to_string())
+        })?;
 
         let mapped_ptr = block
             .mapped_base

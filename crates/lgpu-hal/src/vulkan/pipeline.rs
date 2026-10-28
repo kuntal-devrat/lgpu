@@ -77,7 +77,8 @@ impl VulkanDevice {
                 .map_err(|e| HalError::PipelineError(e.to_string()))?
         };
 
-        let entry_point = CString::new("main").unwrap();
+        let entry_point =
+            CString::new("main").map_err(|e| HalError::InvalidParameter(e.to_string()))?;
         let stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(shader.module)
@@ -134,7 +135,8 @@ impl VulkanDevice {
             HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
         })?;
 
-        let entry_point = CString::new("main").unwrap();
+        let entry_point =
+            CString::new("main").map_err(|e| HalError::InvalidParameter(e.to_string()))?;
         let stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(shader.module)
@@ -235,8 +237,10 @@ impl VulkanDevice {
             HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
         })?;
 
-        let vs_name = CString::new(desc.vs_entry).unwrap();
-        let fs_name = CString::new(desc.fs_entry).unwrap();
+        let vs_name = CString::new(desc.vs_entry)
+            .map_err(|e| HalError::InvalidParameter(format!("Invalid vs_entry name: {e}")))?;
+        let fs_name = CString::new(desc.fs_entry)
+            .map_err(|e| HalError::InvalidParameter(format!("Invalid fs_entry name: {e}")))?;
 
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()

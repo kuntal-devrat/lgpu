@@ -2,18 +2,29 @@
 
 use lgpu::*;
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_command_pool_and_fence_recycling() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     // Rapidly create, record, submit_and_wait across 50 iterations to ensure fences
     // and command recorders are recycled from cache without leaking or accumulating unbounded memory
@@ -42,16 +53,7 @@ fn test_command_pool_and_fence_recycling() {
 
 #[test]
 fn test_batch_submissions_and_fence_cache() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     for _ in 0..20 {
         let mut enc1 = device.create_command_encoder().expect("create encoder 1");

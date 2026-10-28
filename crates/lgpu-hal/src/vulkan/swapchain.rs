@@ -79,12 +79,19 @@ impl VulkanDevice {
             image_count = caps.max_image_count;
         }
 
+        if formats.is_empty() {
+            return Err(HalError::BackendError(
+                "No supported surface formats found for swapchain creation".to_string(),
+            ));
+        }
+
+        let default_format = formats[0];
         let selected_format = if let Some(pref) = preferred_format {
             formats
                 .iter()
                 .find(|f| f.format == pref)
                 .cloned()
-                .unwrap_or(formats[0])
+                .unwrap_or(default_format)
         } else {
             formats
                 .iter()
@@ -95,7 +102,7 @@ impl VulkanDevice {
                         || f.format == vk::Format::R8G8B8A8_SRGB
                 })
                 .cloned()
-                .unwrap_or(formats[0])
+                .unwrap_or(default_format)
         };
 
         let present_mode = match preferred_present_mode {
@@ -260,7 +267,10 @@ impl VulkanDevice {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        let queue = self.queue.lock().unwrap();
+        let queue = match self.queue.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         let res = unsafe { loader.queue_present(*queue, &present_info) };
         match res {
             Ok(suboptimal) => Ok(suboptimal),
@@ -345,7 +355,11 @@ impl VulkanDevice {
             let mut wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
             let mut wait_values = vec![0u64];
 
-            if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+            let staging_guard = match self.staging_ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if let Some(ref ring) = *staging_guard {
                 if ring.current_timeline_value > 0 {
                     wait_sems.push(ring.timeline_semaphore);
                     wait_stages.push(
@@ -355,10 +369,14 @@ impl VulkanDevice {
                     wait_values.push(ring.current_timeline_value);
                 }
             }
+            drop(staging_guard);
 
             let raw_fence = fence.unwrap_or(vk::Fence::null());
             let next_val = {
-                let queue = self.queue.lock().unwrap();
+                let queue = match self.queue.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
                 let next_val = self
                     .internal_frame_counter
                     .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
@@ -383,10 +401,11 @@ impl VulkanDevice {
                 next_val
             };
 
-            self.pending_async_recorders
-                .lock()
-                .unwrap()
-                .push((next_val, vec![recorder]));
+            let mut pending = match self.pending_async_recorders.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            pending.push((next_val, vec![recorder]));
 
             Ok(())
         }

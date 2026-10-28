@@ -187,8 +187,15 @@ impl VulkanBindlessHeap {
         })
     }
 
+    fn lock_pool<'a>(mutex: &'a std::sync::Mutex<SlotPool>) -> std::sync::MutexGuard<'a, SlotPool> {
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     pub fn allocate_buffer_slot(&self) -> Result<u32, HalError> {
-        let mut pool = self.buffer_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.buffer_slots);
         if let Some(slot) = pool.free.pop() {
             return Ok(slot);
         }
@@ -203,7 +210,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn free_buffer_slot(&self, slot: u32) {
-        let mut pool = self.buffer_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.buffer_slots);
         pool.free.push(slot);
     }
 
@@ -232,7 +239,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn allocate_texture_slot(&self) -> Result<u32, HalError> {
-        let mut pool = self.texture_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.texture_slots);
         if let Some(slot) = pool.free.pop() {
             return Ok(slot);
         }
@@ -247,7 +254,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn free_texture_slot(&self, slot: u32) {
-        let mut pool = self.texture_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.texture_slots);
         pool.free.push(slot);
     }
 
@@ -275,7 +282,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn allocate_sampler_slot(&self) -> Result<u32, HalError> {
-        let mut pool = self.sampler_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.sampler_slots);
         if let Some(slot) = pool.free.pop() {
             return Ok(slot);
         }
@@ -290,7 +297,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn free_sampler_slot(&self, slot: u32) {
-        let mut pool = self.sampler_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.sampler_slots);
         pool.free.push(slot);
     }
 
@@ -310,7 +317,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn allocate_storage_image_slot(&self) -> Result<u32, HalError> {
-        let mut pool = self.storage_image_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.storage_image_slots);
         if let Some(slot) = pool.free.pop() {
             return Ok(slot);
         }
@@ -325,7 +332,7 @@ impl VulkanBindlessHeap {
     }
 
     pub fn free_storage_image_slot(&self, slot: u32) {
-        let mut pool = self.storage_image_slots.lock().unwrap();
+        let mut pool = Self::lock_pool(&self.storage_image_slots);
         pool.free.push(slot);
     }
 

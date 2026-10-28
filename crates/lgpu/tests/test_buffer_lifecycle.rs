@@ -6,15 +6,30 @@ use lgpu::{
 use std::sync::Arc;
 use std::thread;
 
+#[macro_export]
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_buffer_offset_read_write() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let desc = BufferDesc {
         label: Some("OffsetTestBuffer"),
@@ -81,13 +96,7 @@ fn test_thread_safety_send_sync() {
     assert_send::<lgpu::Queue>();
     assert_sync::<lgpu::Queue>();
 
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let desc = BufferDesc {
         label: Some("ThreadBuffer"),
@@ -145,13 +154,7 @@ fn test_thread_safety_send_sync() {
 
 #[test]
 fn test_command_pool_and_fence_recycling() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let desc = TextureDesc {
         label: Some("RecycleTarget"),

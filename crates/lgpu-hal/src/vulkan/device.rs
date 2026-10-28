@@ -64,8 +64,14 @@ impl VulkanDevice {
                 .device_wait_idle()
                 .map_err(|e| HalError::BackendError(format!("device_wait_idle failed: {e}")))?;
         }
-        let mut pending = self.pending_async_recorders.lock().unwrap();
-        let mut cache = self.command_recorder_cache.lock().unwrap();
+        let mut pending = match self.pending_async_recorders.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let mut cache = match self.command_recorder_cache.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         for (_, recorders) in pending.drain(..) {
             for r in recorders {
                 unsafe {
@@ -76,25 +82,51 @@ impl VulkanDevice {
                         )
                         .ok();
                 }
-                cache.push((r.command_pool, r.command_buffer));
+                if cache.len() < 32 {
+                    cache.push((r.command_pool, r.command_buffer));
+                } else {
+                    unsafe {
+                        self.device.destroy_command_pool(r.command_pool, None);
+                    }
+                }
             }
         }
         Ok(())
     }
 
-    /// Reclaims completely empty memory blocks in the suballocator back to Vulkan.
+    /// Reclaims completely empty memory blocks in the suballocator and idle command pools back to Vulkan.
     pub fn trim_memory(&self) -> usize {
-        self.allocator.lock().unwrap().trim(&self.device)
+        let mut freed = match self.allocator.lock() {
+            Ok(mut alloc) => alloc.trim(&self.device),
+            Err(p) => p.into_inner().trim(&self.device),
+        };
+        let mut cache = match self.command_recorder_cache.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        for (pool, _) in cache.drain(..) {
+            unsafe {
+                self.device.destroy_command_pool(pool, None);
+            }
+            freed += 1;
+        }
+        freed
     }
 
     /// Returns the number of memory blocks currently held by the suballocator.
     pub fn suballocator_block_count(&self) -> usize {
-        self.allocator.lock().unwrap().block_count()
+        match self.allocator.lock() {
+            Ok(a) => a.block_count(),
+            Err(p) => p.into_inner().block_count(),
+        }
     }
 
     /// Returns the number of empty memory blocks currently held in the suballocator.
     pub fn suballocator_empty_block_count(&self) -> usize {
-        self.allocator.lock().unwrap().empty_block_count()
+        match self.allocator.lock() {
+            Ok(a) => a.empty_block_count(),
+            Err(p) => p.into_inner().empty_block_count(),
+        }
     }
 }
 
@@ -107,21 +139,47 @@ impl Drop for VulkanDevice {
             }
             self.device
                 .destroy_semaphore(self.internal_frame_semaphore, None);
-            for (pool, _) in self.command_recorder_cache.lock().unwrap().drain(..) {
+
+            let mut command_cache = match self.command_recorder_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for (pool, _) in command_cache.drain(..) {
                 self.device.destroy_command_pool(pool, None);
             }
-            for (_, recorders) in self.pending_async_recorders.lock().unwrap().drain(..) {
+
+            let mut pending = match self.pending_async_recorders.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for (_, recorders) in pending.drain(..) {
                 for r in recorders {
                     self.device.destroy_command_pool(r.command_pool, None);
                 }
             }
-            for fence in self.fence_cache.lock().unwrap().drain(..) {
+
+            let mut fence_cache = match self.fence_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for fence in fence_cache.drain(..) {
                 self.device.destroy_fence(fence, None);
             }
-            if let Some(mut ring) = self.staging_ring.lock().unwrap().take() {
+
+            let staging_ring = match self.staging_ring.lock() {
+                Ok(mut g) => g.take(),
+                Err(p) => p.into_inner().take(),
+            };
+            if let Some(mut ring) = staging_ring {
                 ring.destroy(&self.device);
             }
-            self.allocator.lock().unwrap().destroy(&self.device);
+
+            let mut alloc = match self.allocator.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            alloc.destroy(&self.device);
+
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
             self.device.destroy_device(None);

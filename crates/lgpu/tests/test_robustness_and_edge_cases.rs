@@ -1,22 +1,35 @@
 //! Integration tests verifying error paths, bounds checks, swapchain resizing, frames in flight, and multi-threading.
 
 use lgpu::{
-    BufferDesc, BufferUsage, Error, HalError, Instance, MemoryLocation, PresentMode,
-    SurfaceConfiguration, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, Error, HalError, MemoryLocation, PresentMode, SurfaceConfiguration,
+    TextureDesc, TextureFormat, TextureUsage,
 };
 use std::sync::Arc;
 use std::thread;
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_resource_creation_error_paths() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     // 1. Buffer creation with size: 0 must return InvalidParameter
     let zero_buffer_desc = BufferDesc {
@@ -76,14 +89,7 @@ fn test_resource_creation_error_paths() {
 
 #[test]
 fn test_buffer_overflow_checks() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let desc = BufferDesc {
         label: Some("OverflowTestBuffer"),
@@ -135,14 +141,7 @@ fn test_buffer_overflow_checks() {
 
 #[test]
 fn test_swapchain_resize_and_reconfiguration() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (instance, device, queue) = require_gpu!();
 
     // Try creating headless surface
     let surface_res = instance.create_headless_surface();
@@ -229,14 +228,7 @@ fn test_swapchain_resize_and_reconfiguration() {
 
 #[test]
 fn test_multiple_frames_in_flight() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (instance, device, queue) = require_gpu!();
 
     let surface_res = instance.create_headless_surface();
     if let Ok(mut surface) = surface_res {
@@ -294,14 +286,7 @@ fn test_multiple_frames_in_flight() {
 
 #[test]
 fn test_bindless_descriptor_update_after_bind() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let tex_desc = TextureDesc::new_2d(
         64,
@@ -344,14 +329,7 @@ fn test_bindless_descriptor_update_after_bind() {
 
 #[test]
 fn test_concurrent_multithreaded_safety() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let device_arc = Arc::new(device);
     let queue_arc = Arc::new(queue);
@@ -397,14 +375,7 @@ fn test_concurrent_multithreaded_safety() {
 #[cfg(feature = "wgsl")]
 #[test]
 fn test_create_shader_wgsl() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let wgsl_src = r#"
         @vertex

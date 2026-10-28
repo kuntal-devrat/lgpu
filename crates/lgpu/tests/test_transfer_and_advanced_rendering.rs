@@ -2,16 +2,29 @@
 
 use lgpu::*;
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_copy_buffer_to_buffer() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let src_data = [11u8, 22, 33, 44, 55, 66, 77, 88];
     let src_buf = device
@@ -49,14 +62,7 @@ fn test_copy_buffer_to_buffer() {
 
 #[test]
 fn test_write_texture_and_copy_texture_to_buffer() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let width = 8;
     let height = 8;
@@ -107,14 +113,7 @@ fn test_write_texture_and_copy_texture_to_buffer() {
 
 #[test]
 fn test_mipmaps_and_msaa_texture_and_pipeline() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     // Mipmap texture creation (4 mip levels)
     let mip_tex = device
@@ -150,14 +149,7 @@ fn test_mipmaps_and_msaa_texture_and_pipeline() {
 
 #[test]
 fn test_draw_indexed_and_indirect() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let _color_tex = device
         .create_texture(&TextureDesc {
