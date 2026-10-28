@@ -5,6 +5,26 @@ All notable changes to the `lgpu` workspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-10-28
+
+### Added
+- **Automated C99 Bindings Generation**: Added `cbindgen.toml` configuration and `scripts/generate_c_bindings.sh` for generating universal C99 / Zig FFI headers (`crates/lgpu-c/include/lgpu.h`) (#33).
+- **Headless CI Test Resilience**: Added `require_gpu!` test harness across all integration test suites to gracefully skip tests on headless CI runners without physical Vulkan devices or ICDs instead of panicking (#19, #36, #37).
+- **Lock Ordering & Platform Roadmap Documentation**: Added comprehensive lock hierarchy documentation and cross-platform mobile (Android/iOS) and WebGPU (wasm32) roadmaps to `docs/ARCHITECTURE_AND_SAFETY.md` (#22, #23, #32, #42, #57).
+
+### Changed
+- **Command Recorder Cache Capping**: Capped idle command recorder pooling to `MAX_CACHED_COMMAND_RECORDERS = 32`. Recycled command recorders exceeding the cap immediately destroy their command pools to eliminate memory bloat during burst operations (#21, #34, #54).
+- **Device Memory Trimming**: `VulkanDevice::trim_memory()` now drains and destroys all cached idle command pools in addition to freeing unused suballocator memory blocks.
+
+### Fixed
+- **Zero Panics / `.unwrap()` in HAL & C FFI**: Replaced all panicking `.unwrap()` and `.expect()` calls in `crates/lgpu-hal` and `crates/lgpu-c` with robust error propagation returning `HalError` or `LgpuResult` (#17, #18, #20, #27, #28, #30, #31, #35, #40, #43, #45, #46, #47, #49, #50, #52, #53, #55, #56, #58, #59).
+- **Suballocator OOM & Exhaustion Handling**: Handled block exhaustion and memory allocation failures gracefully by returning `HalError::OutOfMemory` rather than panicking (#25, #29, #48).
+- **Swapchain Safety**: Validated physical device surface format list is non-empty before format querying to prevent indexing out of bounds (#18, #26, #39, #40).
+- **Poison-Safe Mutexes**: Replaced unsafe mutex locks in bindless managers, command caches, and device cleanup with poison recovery (`.into_inner()`) (#24, #31, #43, #49, #56).
+- **Strict Lock Acquisition Order**: Enforced deadlock-free lock hierarchy (`sync_lock` -> `staging_ring` -> `queue` -> `pending_recorders` -> `allocator`) across buffer and texture lifecycles (#22, #42, #57).
+
+---
+
 ## [0.1.4] - 2026-10-27
 
 ### Added
