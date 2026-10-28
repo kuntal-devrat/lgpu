@@ -95,3 +95,31 @@ queue.run(encoder)?; // Finishes, submits, and waits synchronously for completio
 # Ok(())
 # }
 ```
+
+---
+
+## 6. Lock Hierarchy & Deadlock Prevention Invariants
+
+To guarantee that multi-threaded recording, async texture uploads, and concurrent queue submissions never deadlock, `lgpu` enforces a strict, monotonic lock acquisition hierarchy:
+
+1. **Object Sync Locks**: `Buffer::sync_lock` / `Texture::sync_lock` (held during CPU-side host reads/writes)
+2. **Staging Ring**: `VulkanDevice::staging_ring` (held during staging slice suballocation and wrap waits)
+3. **Queue Mutex**: `VulkanDevice::queue` (held during `vkQueueSubmit` and `vkQueuePresentKHR`)
+4. **Pending Async Recorders**: `VulkanDevice::pending_async_recorders` (tracked in-flight recorders awaiting timeline semaphores)
+5. **Resource Caches**: `VulkanDevice::command_recorder_cache` and `VulkanDevice::fence_cache`
+6. **Suballocator**: `VulkanDevice::allocator` (Buddy allocator memory blocks)
+7. **Bindless Slot Pools**: `BindlessDescriptorHeap::*_slots`
+
+> [!IMPORTANT]
+> Code within `lgpu` and `lgpu-hal` must never acquire a higher-ranked lock while holding a lower-ranked lock. All mutex acquisitions recover from poisoned locks using `.into_inner()` to prevent cascading panics during thread unwinding.
+
+---
+
+## 7. Cross-Platform Roadmap: Mobile & Web Targets
+
+### Android & iOS
+- **Android**: Supported natively via Vulkan 1.3 on Android 10+ (API 29+) with standard NDK bindings.
+- **iOS / macOS**: Supported via the Vulkan Portability subset using **MoltenVK** with dynamic rendering extensions enabled.
+
+### WebAssembly (wasm32) / WebGPU
+- For web browsers, `lgpu` architectural abstractions map cleanly to WebGPU. Community contributions and experiments targeting `wasm32-unknown-unknown` are tracked under feature discussion issues (#23, #32).

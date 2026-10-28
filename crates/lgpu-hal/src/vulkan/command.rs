@@ -47,6 +47,8 @@ pub enum DrawCommand<'a> {
     },
 }
 
+pub const MAX_CACHED_COMMAND_RECORDERS: usize = 32;
+
 impl VulkanDevice {
     pub fn create_command_recorder(&self) -> Result<VulkanCommandRecorder, HalError> {
         // Harvest any completed async command recorders back into cache
@@ -56,12 +58,24 @@ impl VulkanDevice {
                     .get_semaphore_counter_value(self.internal_frame_semaphore)
                     .unwrap_or(0)
             };
-            let mut pending = self.pending_async_recorders.lock().unwrap();
-            let mut cache = self.command_recorder_cache.lock().unwrap();
+            let mut pending = match self.pending_async_recorders.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let mut cache = match self.command_recorder_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
             pending.retain_mut(|(val, recorders)| {
                 if *val <= current_val {
                     for r in recorders.drain(..) {
-                        cache.push((r.command_pool, r.command_buffer));
+                        if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+                            cache.push((r.command_pool, r.command_buffer));
+                        } else {
+                            unsafe {
+                                self.device.destroy_command_pool(r.command_pool, None);
+                            }
+                        }
                     }
                     false
                 } else {
@@ -86,7 +100,13 @@ impl VulkanDevice {
                                     )
                                     .ok();
                             }
-                            cache.push((r.command_pool, r.command_buffer));
+                            if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+                                cache.push((r.command_pool, r.command_buffer));
+                            } else {
+                                unsafe {
+                                    self.device.destroy_command_pool(r.command_pool, None);
+                                }
+                            }
                             false
                         } else {
                             true
@@ -96,8 +116,15 @@ impl VulkanDevice {
             }
         }
 
-        let (command_pool, command_buffer) = match self.command_recorder_cache.lock().unwrap().pop()
-        {
+        let cached_item = {
+            let mut cache = match self.command_recorder_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.pop()
+        };
+
+        let (command_pool, command_buffer) = match cached_item {
             Some((pool, cb)) => {
                 unsafe {
                     self.device
@@ -156,10 +183,17 @@ impl VulkanDevice {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
         } {
-            self.command_recorder_cache
-                .lock()
-                .unwrap()
-                .push((command_pool, command_buffer));
+            let mut cache = match self.command_recorder_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+                cache.push((command_pool, command_buffer));
+            } else {
+                unsafe {
+                    self.device.destroy_command_pool(command_pool, None);
+                }
+            }
             return Err(HalError::CommandError(e.to_string()));
         }
 
@@ -176,10 +210,18 @@ impl VulkanDevice {
                 vk::CommandBufferResetFlags::empty(),
             );
         }
-        self.command_recorder_cache
-            .lock()
-            .unwrap()
-            .push((recorder.command_pool, recorder.command_buffer));
+        let mut cache = match self.command_recorder_cache.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+            cache.push((recorder.command_pool, recorder.command_buffer));
+        } else {
+            unsafe {
+                self.device
+                    .destroy_command_pool(recorder.command_pool, None);
+            }
+        }
     }
 
     pub fn bind_buffers_to_compute_pipeline(
@@ -1382,7 +1424,10 @@ impl VulkanDevice {
         texture: &VulkanTexture,
     ) {
         unsafe {
-            let mut lock = texture.layout.lock().unwrap();
+            let mut lock = match texture.layout.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
             let old_layout = *lock;
 
             if old_layout != vk::ImageLayout::TRANSFER_DST_OPTIMAL {
@@ -1458,7 +1503,10 @@ impl VulkanDevice {
     }
 
     pub fn write_texture(&self, texture: &VulkanTexture, data: &[u8]) -> Result<(), HalError> {
-        let mut staging_guard = self.staging_ring.lock().unwrap();
+        let mut staging_guard = match self.staging_ring.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         if let Some(ref mut ring) = *staging_guard {
             let data_len = data.len() as u64;
             if data_len <= ring.capacity {
@@ -1563,7 +1611,7 @@ impl VulkanDevice {
                     self.device
                         .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
 
-                    *texture.layout.lock().unwrap() = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+                    texture.transition_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
                     self.device
                         .end_command_buffer(recorder.command_buffer)
@@ -1587,7 +1635,10 @@ impl VulkanDevice {
                     .push_next(&mut timeline_info);
 
                 {
-                    let queue = self.queue.lock().unwrap();
+                    let queue = match self.queue.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
                     unsafe {
                         self.device
                             .queue_submit(*queue, &[submit_info], vk::Fence::null())
@@ -1648,7 +1699,7 @@ impl VulkanDevice {
             let post_dep = vk::DependencyInfo::default().image_memory_barriers(&post_barriers);
             self.device
                 .cmd_pipeline_barrier2(recorder.command_buffer, &post_dep);
-            *texture.layout.lock().unwrap() = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            texture.transition_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         }
 
         self.submit_and_wait(recorder)?;
@@ -1664,7 +1715,10 @@ impl VulkanDevice {
         buffer: &VulkanBuffer,
     ) {
         unsafe {
-            let mut lock = texture.layout.lock().unwrap();
+            let mut lock = match texture.layout.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
             let old_layout = *lock;
 
             if old_layout != vk::ImageLayout::TRANSFER_SRC_OPTIMAL {
@@ -1763,13 +1817,18 @@ impl VulkanDevice {
                 vk_wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
             }
 
-            if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+            let staging_guard = match self.staging_ring.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if let Some(ref ring) = *staging_guard {
                 if ring.current_timeline_value > 0 {
                     vk_wait_sems.push(ring.timeline_semaphore);
                     vk_wait_values.push(ring.current_timeline_value);
                     vk_wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
                 }
             }
+            drop(staging_guard);
 
             let mut vk_signal_sems = Vec::with_capacity(signal_semaphores.len() + 1);
             let mut vk_signal_values = Vec::with_capacity(signal_semaphores.len() + 1);
@@ -1780,7 +1839,10 @@ impl VulkanDevice {
 
             let fence = sync_fence.unwrap_or(vk::Fence::null());
             let next_val = {
-                let queue = self.queue.lock().unwrap();
+                let queue = match self.queue.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
                 let next_val = self
                     .internal_frame_counter
                     .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
@@ -1808,7 +1870,13 @@ impl VulkanDevice {
             if let Some(f) = sync_fence {
                 let wait_res = self.device.wait_for_fences(&[f], true, u64::MAX);
                 self.device.reset_fences(&[f]).ok();
-                self.fence_cache.lock().unwrap().push(f);
+                {
+                    let mut fence_cache = match self.fence_cache.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    fence_cache.push(f);
+                }
                 wait_res.map_err(|e| HalError::CommandError(e.to_string()))?;
 
                 // Acquire locks in standard order: pending_async_recorders THEN command_recorder_cache
@@ -1816,16 +1884,30 @@ impl VulkanDevice {
                     .device
                     .get_semaphore_counter_value(self.internal_frame_semaphore)
                     .unwrap_or(0);
-                let mut pending = self.pending_async_recorders.lock().unwrap();
-                let mut cache = self.command_recorder_cache.lock().unwrap();
+                let mut pending = match self.pending_async_recorders.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                let mut cache = match self.command_recorder_cache.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
                 for r in recorders {
-                    cache.push((r.command_pool, r.command_buffer));
+                    if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+                        cache.push((r.command_pool, r.command_buffer));
+                    } else {
+                        self.device.destroy_command_pool(r.command_pool, None);
+                    }
                 }
 
                 pending.retain_mut(|(val, async_recorders)| {
                     if *val <= current_val {
                         for r in async_recorders.drain(..) {
-                            cache.push((r.command_pool, r.command_buffer));
+                            if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
+                                cache.push((r.command_pool, r.command_buffer));
+                            } else {
+                                self.device.destroy_command_pool(r.command_pool, None);
+                            }
                         }
                         false
                     } else {
@@ -1833,17 +1915,24 @@ impl VulkanDevice {
                     }
                 });
             } else {
-                self.pending_async_recorders
-                    .lock()
-                    .unwrap()
-                    .push((next_val, recorders));
+                let mut pending = match self.pending_async_recorders.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                pending.push((next_val, recorders));
             }
         }
         Ok(())
     }
 
     pub fn submit_and_wait(&self, recorder: VulkanCommandRecorder) -> Result<(), HalError> {
-        let fence = self.fence_cache.lock().unwrap().pop();
+        let fence = {
+            let mut cache = match self.fence_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.pop()
+        };
         let fence = match fence {
             Some(f) => f,
             None => {
@@ -1859,7 +1948,11 @@ impl VulkanDevice {
         if res.is_err() {
             unsafe {
                 self.device.reset_fences(&[fence]).ok();
-                self.fence_cache.lock().unwrap().push(fence);
+                let mut cache = match self.fence_cache.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                cache.push(fence);
             }
         }
         res
@@ -1869,7 +1962,13 @@ impl VulkanDevice {
         &self,
         recorders: Vec<VulkanCommandRecorder>,
     ) -> Result<(), HalError> {
-        let fence = self.fence_cache.lock().unwrap().pop();
+        let fence = {
+            let mut cache = match self.fence_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.pop()
+        };
         let fence = match fence {
             Some(f) => f,
             None => {
@@ -1885,7 +1984,11 @@ impl VulkanDevice {
         if res.is_err() {
             unsafe {
                 self.device.reset_fences(&[fence]).ok();
-                self.fence_cache.lock().unwrap().push(fence);
+                let mut cache = match self.fence_cache.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                cache.push(fence);
             }
         }
         res

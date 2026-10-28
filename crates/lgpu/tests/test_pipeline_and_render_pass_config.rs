@@ -2,8 +2,8 @@
 
 use lgpu::{
     BlendState, BufferDesc, BufferUsage, ColorLoadOp, CullMode, FrontFace, GraphicsPipelineDesc,
-    Instance, MemoryLocation, PrimitiveState, PrimitiveTopology, RenderPassDesc, TextureDesc,
-    TextureFormat, TextureUsage,
+    MemoryLocation, PrimitiveState, PrimitiveTopology, RenderPassDesc, TextureDesc, TextureFormat,
+    TextureUsage,
 };
 
 const TRIANGLE_SPV: &[u32] = &[
@@ -31,16 +31,29 @@ const TRIANGLE_SPV: &[u32] = &[
     65592,
 ];
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_texture_ownership_flag() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let tex_desc = TextureDesc::new_2d(
         64,
@@ -57,14 +70,7 @@ fn test_texture_ownership_flag() {
 
 #[test]
 fn test_error_propagation_push_constants_overflow() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let shader = device.create_shader_spirv(TRIANGLE_SPV).expect("shader");
     let pipeline = device
@@ -92,14 +98,7 @@ fn test_error_propagation_push_constants_overflow() {
 
 #[test]
 fn test_command_encoder_abandonment_and_recycling() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, _queue) = require_gpu!();
 
     // Create and abandon 32 command encoders without calling .finish()
     // Thanks to Drop implementation on CommandEncoder, all command recorders
@@ -119,14 +118,7 @@ fn test_command_encoder_abandonment_and_recycling() {
 
 #[test]
 fn test_configurable_pipeline_desc() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let shader = device.create_shader_spirv(TRIANGLE_SPV).expect("shader");
 
@@ -161,14 +153,7 @@ fn test_configurable_pipeline_desc() {
 
 #[test]
 fn test_load_op_and_render_pass_compositing() {
-    let instance = Instance::new().expect("Instance::new");
-    let adapters = instance.enumerate_adapters().expect("enumerate_adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("request_device");
+    let (_instance, device, queue) = require_gpu!();
 
     let shader = device.create_shader_spirv(TRIANGLE_SPV).expect("shader");
     let mut desc = GraphicsPipelineDesc::new("vs_main", "fs_main", TextureFormat::Rgba8Unorm);

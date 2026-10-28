@@ -55,8 +55,10 @@ impl VulkanInstance {
         let entry =
             unsafe { ash::Entry::load().map_err(|e| HalError::LibraryLoadError(e.to_string()))? };
 
-        let app_name = CString::new("lgpu Application").unwrap();
-        let engine_name = CString::new("lgpu").unwrap();
+        let app_name =
+            CString::new("lgpu Application").map_err(|e| HalError::BackendError(e.to_string()))?;
+        let engine_name =
+            CString::new("lgpu").map_err(|e| HalError::BackendError(e.to_string()))?;
 
         let app_info = vk::ApplicationInfo::default()
             .application_name(&app_name)

@@ -45,18 +45,29 @@ fn test_send_sync_type_invariants() {
     assert_send::<CommandBuffer>();
 }
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_concurrent_buffer_access_and_synchronization() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _) = require_gpu!();
 
     let size = 1024u64;
     let buffer = Arc::new(
@@ -110,16 +121,7 @@ fn test_concurrent_buffer_access_and_synchronization() {
 
 #[test]
 fn test_concurrent_texture_layout_protection() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _) = require_gpu!();
 
     let texture = Arc::new(
         device

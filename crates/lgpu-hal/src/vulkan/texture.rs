@@ -35,12 +35,18 @@ unsafe impl Sync for VulkanSampler {}
 impl VulkanTexture {
     #[inline]
     pub fn current_layout(&self) -> vk::ImageLayout {
-        *self.layout.lock().unwrap()
+        match self.layout.lock() {
+            Ok(g) => *g,
+            Err(p) => *p.into_inner(),
+        }
     }
 
     #[inline]
     pub fn transition_layout(&self, new_layout: vk::ImageLayout) -> vk::ImageLayout {
-        let mut lock = self.layout.lock().unwrap();
+        let mut lock = match self.layout.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         let old = *lock;
         *lock = new_layout;
         old
@@ -117,7 +123,11 @@ impl VulkanDevice {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let alloc = self.allocator.lock().unwrap().allocate(
+        let mut alloc_lock = match self.allocator.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let alloc = alloc_lock.allocate(
             &self.device,
             mem_reqs.size,
             mem_reqs.alignment,
@@ -126,6 +136,7 @@ impl VulkanDevice {
             is_coherent,
             super::allocator::AllocationType::Optimal,
         )?;
+        drop(alloc_lock);
 
         unsafe {
             if let Err(e) = self
@@ -133,12 +144,11 @@ impl VulkanDevice {
                 .bind_image_memory(image, alloc.memory, alloc.offset)
             {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator.lock().unwrap().free(
-                        block_id,
-                        alloc.offset,
-                        mem_reqs.size,
-                        &self.device,
-                    );
+                    let mut alloc_lock = match self.allocator.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    alloc_lock.free(block_id, alloc.offset, mem_reqs.size, &self.device);
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
@@ -196,7 +206,11 @@ impl VulkanDevice {
             return;
         }
 
-        if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+        let staging_guard = match self.staging_ring.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(ref ring) = *staging_guard {
             if ring.current_timeline_value > 0 {
                 let completed = unsafe {
                     self.device
@@ -215,6 +229,7 @@ impl VulkanDevice {
                 }
             }
         }
+        drop(staging_guard);
 
         unsafe {
             if texture.view != vk::ImageView::null() {
@@ -225,7 +240,11 @@ impl VulkanDevice {
             }
             if texture.memory != vk::DeviceMemory::null() {
                 if let Some(block_id) = texture.block_id {
-                    self.allocator.lock().unwrap().free(
+                    let mut alloc_lock = match self.allocator.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    alloc_lock.free(
                         block_id,
                         texture.offset,
                         texture.allocated_size,

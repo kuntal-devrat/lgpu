@@ -91,7 +91,11 @@ impl VulkanDevice {
             self.find_memory_type(mem_reqs.memory_type_bits, mem_props)?;
         let is_host_visible = desc.memory_location != MemoryLocation::GpuOnly;
 
-        let alloc = self.allocator.lock().unwrap().allocate(
+        let mut alloc_lock = match self.allocator.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let alloc = alloc_lock.allocate(
             &self.device,
             mem_reqs.size,
             mem_reqs.alignment,
@@ -100,6 +104,7 @@ impl VulkanDevice {
             is_coherent,
             super::allocator::AllocationType::Linear,
         )?;
+        drop(alloc_lock);
 
         unsafe {
             if let Err(e) = self
@@ -107,12 +112,11 @@ impl VulkanDevice {
                 .bind_buffer_memory(buffer, alloc.memory, alloc.offset)
             {
                 if let Some(block_id) = alloc.block_id {
-                    self.allocator.lock().unwrap().free(
-                        block_id,
-                        alloc.offset,
-                        mem_reqs.size,
-                        &self.device,
-                    );
+                    let mut alloc_lock = match self.allocator.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    alloc_lock.free(block_id, alloc.offset, mem_reqs.size, &self.device);
                 } else {
                     self.device.free_memory(alloc.memory, None);
                 }
@@ -143,7 +147,10 @@ impl VulkanDevice {
         offset: u64,
         data: &[u8],
     ) -> Result<(), HalError> {
-        let _guard = buffer.sync_lock.lock().unwrap();
+        let _guard = match buffer.sync_lock.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         let ptr = buffer
             .mapped_ptr
             .ok_or_else(|| HalError::MapError("Buffer is not host-mapped".to_string()))?;
@@ -185,7 +192,10 @@ impl VulkanDevice {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), HalError> {
-        let _guard = buffer.sync_lock.lock().unwrap();
+        let _guard = match buffer.sync_lock.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         let ptr = buffer
             .mapped_ptr
             .ok_or_else(|| HalError::MapError("Buffer is not host-mapped".to_string()))?;
@@ -226,7 +236,16 @@ impl VulkanDevice {
             return;
         }
 
-        if let Some(ref ring) = *self.staging_ring.lock().unwrap() {
+        let _guard = match buffer.sync_lock.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+
+        let staging_guard = match self.staging_ring.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(ref ring) = *staging_guard {
             if ring.current_timeline_value > 0 {
                 let completed = unsafe {
                     self.device
@@ -245,8 +264,8 @@ impl VulkanDevice {
                 }
             }
         }
+        drop(staging_guard);
 
-        let _guard = buffer.sync_lock.lock().unwrap();
         unsafe {
             if buffer.block_id.is_none() && buffer.mapped_ptr.take().is_some() {
                 self.device.unmap_memory(buffer.memory);
@@ -255,12 +274,11 @@ impl VulkanDevice {
             }
             self.device.destroy_buffer(buffer.buffer, None);
             if let Some(block_id) = buffer.block_id {
-                self.allocator.lock().unwrap().free(
-                    block_id,
-                    buffer.offset,
-                    buffer.allocated_size,
-                    &self.device,
-                );
+                let mut alloc_lock = match self.allocator.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                alloc_lock.free(block_id, buffer.offset, buffer.allocated_size, &self.device);
             } else {
                 self.device.free_memory(buffer.memory, None);
             }

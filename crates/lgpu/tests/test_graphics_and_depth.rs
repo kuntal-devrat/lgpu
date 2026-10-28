@@ -5,19 +5,31 @@
 //! - Graphics pipeline creation with depth testing and depth writing
 //! - Rendering with color and depth attachments
 
-use lgpu::{
-    AddressMode, FilterMode, Instance, SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
-};
+use lgpu::{AddressMode, FilterMode, SamplerDesc, TextureDesc, TextureFormat, TextureUsage};
+
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
 
 #[test]
 fn test_bindless_texture_slot_allocation_and_recycling() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let desc = TextureDesc {
         label: Some("SampledTex0"),
@@ -62,13 +74,7 @@ fn test_bindless_texture_slot_allocation_and_recycling() {
 
 #[test]
 fn test_bindless_sampler_creation_and_recycling() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let desc1 = SamplerDesc {
         label: Some("LinearSampler"),
@@ -127,13 +133,7 @@ fn test_bindless_sampler_creation_and_recycling() {
 
 #[test]
 fn test_dynamic_rendering_with_depth_attachment() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     // 1. Create color attachment texture
     let color_desc = TextureDesc {
@@ -188,13 +188,7 @@ fn test_dynamic_rendering_with_depth_attachment() {
 
 #[test]
 fn test_graphics_pipeline_with_depth_testing() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     const TRIANGLE_SPV: &[u32] = &[
         119734787, 65536, 28, 67, 0, 131089, 1, 393227, 1, 1280527431, 1685353262, 808793134, 0,

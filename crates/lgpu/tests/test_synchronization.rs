@@ -5,22 +5,34 @@
 //! - Multi-threaded command recording and atomic batch submissions
 //! - GPU execution, memory, and buffer pipeline barriers
 
-use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
-};
+use lgpu::{BufferDesc, BufferUsage, MemoryLocation, TextureDesc, TextureFormat, TextureUsage};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_timeline_semaphore_cpu_signaling_and_waiting() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _queue) = require_gpu!();
 
     let semaphore = Arc::new(
         device
@@ -63,13 +75,7 @@ fn test_timeline_semaphore_cpu_signaling_and_waiting() {
 
 #[test]
 fn test_timeline_semaphore_gpu_async_pipelining() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let timeline = device
         .create_timeline_semaphore(0)
@@ -141,13 +147,7 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
 
 #[test]
 fn test_multithreaded_batch_submission() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let device_arc = Arc::new(device);
     let mut thread_handles = Vec::new();
@@ -207,13 +207,7 @@ fn test_multithreaded_batch_submission() {
 
 #[test]
 fn test_gpu_barriers_and_buffer_synchronization() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let buf_desc = BufferDesc {
         label: Some("BarrierTestBuffer"),
@@ -243,13 +237,7 @@ fn test_gpu_barriers_and_buffer_synchronization() {
 
 #[test]
 fn test_async_recorder_harvesting_leak_free() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     let timeline = device
         .create_timeline_semaphore(0)

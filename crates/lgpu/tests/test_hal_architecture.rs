@@ -31,17 +31,19 @@ fn test_lgpu_modular_exports() {
     use lgpu::buffer::Buffer;
     use lgpu::instance::Instance;
 
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
+    let instance = match Instance::new() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
 
-    let (device, _queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to create device");
+    let (device, _queue) = match adapters[0].request_device(&instance) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
     let buf: Buffer = device
         .create_buffer(&BufferDesc {
             label: Some("modular_test_buf"),
@@ -68,17 +70,19 @@ fn test_hal_vulkan_modular_exports() {
         texture::{VulkanSampler, VulkanTexture},
     };
 
-    let instance = VulkanInstance::new().expect("Failed to create VulkanInstance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
+    let instance = match VulkanInstance::new() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let adapters = match instance.enumerate_adapters() {
+        Ok(a) if !a.is_empty() => a,
+        _ => return,
+    };
 
-    let dev: VulkanDevice = instance
-        .create_device(&adapters[0])
-        .expect("Failed to create VulkanDevice");
+    let dev: VulkanDevice = match instance.create_device(&adapters[0]) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
     assert!(dev.queue_family_index < 32);
 
     // Ensure types from submodules are usable

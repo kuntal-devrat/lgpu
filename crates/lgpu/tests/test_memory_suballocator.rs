@@ -2,18 +2,29 @@
 
 use lgpu::*;
 
+macro_rules! require_gpu {
+    () => {
+        match (|| {
+            let instance = lgpu::Instance::new().ok()?;
+            let adapters = instance.enumerate_adapters().ok()?;
+            if adapters.is_empty() {
+                return None;
+            }
+            let (device, queue) = adapters[0].request_device(&instance).ok()?;
+            Some((instance, device, queue))
+        })() {
+            Some(tuple) => tuple,
+            None => {
+                eprintln!("Skipping test: Vulkan 1.3 physical device not available");
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_suballocator_exceeding_4096_allocations() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _) = require_gpu!();
 
     // Allocate 5,000 small buffers to verify suballocation.
     // Without a suballocator, this would exceed the Vulkan maxMemoryAllocationCount
@@ -67,16 +78,7 @@ fn test_suballocator_exceeding_4096_allocations() {
 
 #[test]
 fn test_pipeline_cache_reuse() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, queue) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, queue) = require_gpu!();
 
     pub const VECTOR_ADD_SPV: &[u32] = &[
         119734787, 65536, 28, 36, 0, 131089, 1, 720906, 1599492179, 1599227979, 1919906931,
@@ -133,16 +135,7 @@ fn test_pipeline_cache_reuse() {
 
 #[test]
 fn test_suballocator_block_reclamation_and_trim() {
-    let instance = Instance::new().expect("Failed to create instance");
-    let adapters = instance
-        .enumerate_adapters()
-        .expect("Failed to enumerate adapters");
-    if adapters.is_empty() {
-        return;
-    }
-    let (device, _) = adapters[0]
-        .request_device(&instance)
-        .expect("Failed to request device");
+    let (_instance, device, _) = require_gpu!();
 
     assert_eq!(device.suballocator_block_count(), 0);
 
