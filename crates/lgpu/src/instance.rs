@@ -120,9 +120,20 @@ impl Adapter {
     /// let (device, queue) = adapter.request_device(&instance).expect("Failed to create device");
     /// ```
     pub fn request_device(&self, instance: &Instance) -> Result<(Device, Queue), Error> {
+        self.request_device_with_cache(instance, &[])
+    }
+
+    /// Requests a logical device and seeds its pipeline cache with `cache`, previously obtained
+    /// from [`Device::pipeline_cache_data`].
+    pub fn request_device_with_cache(
+        &self,
+        instance: &Instance,
+        cache: &[u8],
+    ) -> Result<(Device, Queue), Error> {
+        let initial_cache = if cache.is_empty() { None } else { Some(cache) };
         let raw_device = instance
             .vulkan_instance
-            .create_device(&self.vulkan_adapter)?;
+            .create_device_with_cache(&self.vulkan_adapter, initial_cache)?;
         let device_arc = Arc::new(raw_device);
 
         let device = Device {
@@ -132,6 +143,7 @@ impl Adapter {
         let queue = Queue {
             vulkan_device: device_arc,
             _instance: Arc::clone(&instance.vulkan_instance),
+            family: crate::QueueFamily::Graphics,
         };
 
         Ok((device, queue))

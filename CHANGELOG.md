@@ -1,114 +1,200 @@
 # Changelog
 
-All notable changes to the `lgpu` workspace are documented in this file.
+All notable changes to the `lgpu` workspace are recorded in this file. The format
+follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## Unreleased
+
+### Added
+- Separate async compute queue support: adapters with a second compute-capable family get a
+  dedicated queue (`Device::compute_queue`, `Device::create_compute_command_encoder`,
+  `QueueFamily`), and buffers/textures are created with concurrent sharing so both queues can
+  use them without ownership transfers.
+- `examples/08_windowed_mesh`: winit window rendering a textured mesh through `SurfaceFrames`
+  with 4x MSAA and depth.
+
+- 1D, 3D, cube, cube-array and 2D-array textures through `TextureDimension`, with per-layer
+  and per-slice uploads, readbacks and mip generation.
+- `Depth16Unorm`, `Depth24Stencil8` and `Depth32FloatStencil8` formats, including stencil
+  aspect barriers and depth/stencil attachment selection.
+- `FrameRenderer`/`FrameConfig`: depth and MSAA attachments that follow the surface size.
+- C API parity for texture dimensions, vertex buffers, MSAA resolve, uniform-buffer slots,
+  GPU timestamps, staged texture uploads, device-local buffers, debug labels and comparison
+  samplers (`lgpu_create_texture_ex`, `lgpu_encoder_draw_with_resolve`, ...).
+- `examples/07_textured_mesh`: indexed textured quad with uniform buffer, mips, depth test
+  and 4x MSAA resolve.
+
+
+## [Unreleased]
+
+### Added
+- Vertex buffer layouts and attributes in `GraphicsPipelineDesc`, plus
+  `CommandEncoder::bind_vertex_buffer`, so meshes can be drawn from vertex and index buffers.
+- A bindless uniform buffer binding (binding 4), `Buffer::uniform_id()` and
+  `Device::write_uniform_buffer_descriptors_batch()`.
+- MSAA resolve targets through `draw_with_ops_resolve`, `draw_with_depth_and_ops_resolve`,
+  `draw_indexed_with_ops_resolve`, `draw_indirect_with_ops_resolve` and
+  `begin_render_pass_with_resolve`.
+- WGSL compilation is part of the default feature set.
+- Pipeline cache persistence with `Device::pipeline_cache_data()` and
+  `Adapter::request_device_with_cache()`.
+- Sampler depth comparison (`SamplerDesc::compare_enable` and `compare_op`) for shadow maps.
+- Debug labels for GPU debuggers through `CommandEncoder::begin_debug_label` and
+  `end_debug_label`.
+- `LGPU_PANIC_ON_VALIDATION=1` to turn validation errors into panics; they are logged
+  otherwise.
+
+### Fixed
+- Cloned buffers and textures now share their host-access mutex and image layout state,
+  so reads and writes through different handles are serialized and barriers always see
+  the layout the image is actually in.
+- The buddy allocator ignores frees of untracked offsets instead of inserting a duplicate
+  chunk, which could hand the same memory to two live allocations.
+- Dedicated and block allocations free their `VkDeviceMemory` when `vkMapMemory` fails,
+  and buffer bind failures unmap before freeing.
+- Texture creation releases the image and its memory when image view creation fails, and
+  pipeline and bindless heap creation release their layouts and pools on failure paths.
+- Staging ring creation releases the buffer and memory if binding, mapping or semaphore
+  creation fails.
+- Freeing a dedicated allocation no longer frees memory that is still mapped.
+- `create_texture` rejects `sample_count` values that are not 1, 2, 4, 8, 16, 32 or 64,
+  and rejects more mip levels than the texture extent allows.
+- `write_texture` rejects uploads smaller than one packed mip level, multisampled
+  targets and depth formats.
+- Bindless slot recycling ignores duplicate and out of range frees.
+- `acquire_next_image` reports `VK_SUBOPTIMAL_KHR` as an error instead of returning image
+  index 0.
+
+### Changed
+- `Surface::configure` destroys a newly created swapchain and any sync objects it
+  created when a later step fails, instead of leaking them.
+- The buddy allocator keeps free chunks in hash sets, so buddy lookup during coalescing is
+  O(1) rather than a linear scan.
 
 ## [0.1.5] - 2026-10-28
 
 ### Added
-- **Automated C99 Bindings Generation**: Added `cbindgen.toml` configuration and `scripts/generate_c_bindings.sh` for generating universal C99 / Zig FFI headers (`crates/lgpu-c/include/lgpu.h`) (#33).
-- **Headless CI Test Resilience**: Added `require_gpu!` test harness across all integration test suites to gracefully skip tests on headless CI runners without physical Vulkan devices or ICDs instead of panicking (#19, #36, #37).
-- **Lock Ordering & Platform Roadmap Documentation**: Added comprehensive lock hierarchy documentation and cross-platform mobile (Android/iOS) and WebGPU (wasm32) roadmaps to `docs/ARCHITECTURE_AND_SAFETY.md` (#22, #23, #32, #42, #57).
+- Automated C99 binding generation: `cbindgen.toml` and
+  `scripts/generate_c_bindings.sh` produce `crates/lgpu-c/include/lgpu.h` (#33).
+- A `require_gpu!` harness in the integration tests, so suites skip instead of panicking
+  on headless machines without a Vulkan device (#19, #36, #37).
+- Lock ordering rules and a mobile and web roadmap in
+  `docs/ARCHITECTURE_AND_SAFETY.md` (#22, #23, #32, #42, #57).
 
 ### Changed
-- **Command Recorder Cache Capping**: Capped idle command recorder pooling to `MAX_CACHED_COMMAND_RECORDERS = 32`. Recycled command recorders exceeding the cap immediately destroy their command pools to eliminate memory bloat during burst operations (#21, #34, #54).
-- **Device Memory Trimming**: `VulkanDevice::trim_memory()` now drains and destroys all cached idle command pools in addition to freeing unused suballocator memory blocks.
+- Idle command recorder pooling is capped at `MAX_CACHED_COMMAND_RECORDERS = 32`.
+  Recorders past the cap destroy their command pool immediately (#21, #34, #54).
+- `VulkanDevice::trim_memory()` drains and destroys cached idle command pools as well as
+  freeing unused suballocator blocks.
 
 ### Fixed
-- **Zero Panics / `.unwrap()` in HAL & C FFI**: Replaced all panicking `.unwrap()` and `.expect()` calls in `crates/lgpu-hal` and `crates/lgpu-c` with robust error propagation returning `HalError` or `LgpuResult` (#17, #18, #20, #27, #28, #30, #31, #35, #40, #43, #45, #46, #47, #49, #50, #52, #53, #55, #56, #58, #59).
-- **Suballocator OOM & Exhaustion Handling**: Handled block exhaustion and memory allocation failures gracefully by returning `HalError::OutOfMemory` rather than panicking (#25, #29, #48).
-- **Swapchain Safety**: Validated physical device surface format list is non-empty before format querying to prevent indexing out of bounds (#18, #26, #39, #40).
-- **Poison-Safe Mutexes**: Replaced unsafe mutex locks in bindless managers, command caches, and device cleanup with poison recovery (`.into_inner()`) (#24, #31, #43, #49, #56).
-- **Strict Lock Acquisition Order**: Enforced deadlock-free lock hierarchy (`sync_lock` -> `staging_ring` -> `queue` -> `pending_recorders` -> `allocator`) across buffer and texture lifecycles (#22, #42, #57).
-
----
+- Panicking `.unwrap()` and `.expect()` calls in `lgpu-hal` and `lgpu-c` were replaced
+  with error returns (#17, #18, #20, #27, #28, #30, #31, #35, #40, #43, #45, #46, #47,
+  #49, #50, #52, #53, #55, #56, #58, #59).
+- Suballocator exhaustion and allocation failure return `HalError::OutOfMemory` instead
+  of panicking (#25, #29, #48).
+- Swapchain creation checks that the surface reports at least one format before reading
+  the list (#18, #26, #39, #40).
+- Mutexes in bindless managers, command caches and device cleanup recover from poisoning
+  with `into_inner()` (#24, #31, #43, #49, #56).
+- Lock acquisition follows the documented order across buffer and texture lifetimes
+  (#22, #42, #57).
 
 ## [0.1.4] - 2026-10-27
 
 ### Added
-- **Asynchronous Ring Staging Buffer**: 64 MiB host-visible, host-coherent persistent staging memory with linear suballocation and timeline semaphore synchronization, eliminating blocking `vkQueueWaitIdle()` on texture uploads.
-- **Vulkan 1.3 Synchronization2**: Replaced legacy pipeline barriers across command encoders with `vkCmdPipelineBarrier2` and `VkDependencyInfo`.
-- **Runtime WGSL Compilation**: Optional `Device::create_shader_wgsl()` powered by Naga under the `wgsl` Cargo feature flag (#3).
-- **Burst Upload & Resize Stress Testing**: Integration test validating 100 burst uploads/frame across rapid window resize cycles with zero driver crashes or memory leaks.
+- Asynchronous ring staging buffer: 64 MiB of persistent host visible, host coherent
+  memory with linear suballocation and timeline semaphore tracking, so texture uploads no
+  longer call `vkQueueWaitIdle()`.
+- Vulkan 1.3 synchronization2: command encoders use `vkCmdPipelineBarrier2` and
+  `VkDependencyInfo` instead of legacy pipeline barriers.
+- Runtime WGSL compilation through `Device::create_shader_wgsl()` behind the `wgsl`
+  feature (#3).
+- An integration test that runs 100 uploads per frame across window resize cycles.
 
 ### Changed
-- **Robust Frames-in-Flight Buffer**: Implemented triple buffering (`MAX_FRAMES_IN_FLIGHT = 3`) with CPU fence waits before command recording and per-swapchain-image render semaphores to strictly adhere to Vulkan presentation requirements.
-- **Buddy Memory Allocator**: Replaced naive vector sorting with a 64 MiB block power-of-two Buddy Allocator with $O(1)$ coalescing and warm block pooling, preventing driver `maxMemoryAllocationCount` limit crashes (#1, #13).
-- **Bulletproof Swapchain Reconfiguration**: Intercepts `VK_ERROR_OUT_OF_DATE_KHR`, `VK_SUBOPTIMAL_KHR`, `VK_NOT_READY`, passes `old_swapchain` during re-creation, and gracefully pauses rendering on zero-size minimized windows.
+- Frames in flight: triple buffering (`MAX_FRAMES_IN_FLIGHT = 3`), a CPU fence wait
+  before recording and one render semaphore per swapchain image.
+- Memory allocation uses a 64 MiB power-of-two buddy allocator with O(1) coalescing and
+  a warm block pool, which avoids the driver `maxMemoryAllocationCount` limit (#1, #13).
+- Swapchain reconfiguration handles `VK_ERROR_OUT_OF_DATE_KHR`, `VK_SUBOPTIMAL_KHR` and
+  `VK_NOT_READY`, passes `old_swapchain` on re-creation, and pauses rendering for
+  zero-size windows.
 
 ### Fixed
-- **Bindless Descriptor Slot Guards**: Implemented `BufferSlotGuard`, `TextureSlotGuard`, and `SamplerSlotGuard` to ensure descriptor heap slots are recycled safely without leaks or double-frees (#14, #15).
-- **CI & Headless Test Stability**: Gracefully handle environments without physical Vulkan devices in bindless heap tests (#11, #12).
-- **Concurrent Submission Safety**: Enforced monotonic timeline semaphore signal ordering under concurrent multi-threaded queue submissions.
-
----
+- `BufferSlotGuard`, `TextureSlotGuard` and `SamplerSlotGuard` return descriptor heap
+  slots without leaks or double frees (#14, #15).
+- CI and headless test runs handle machines without a Vulkan device (#11, #12).
+- Timeline semaphore signals stay monotonic under concurrent queue submissions.
 
 ## [0.1.3] - 2026-10-18
 
 ### Added
-- Real-time voxel raymarching engine (`example-voxel-renderer`) with DDA traversal, procedural mountains, islands, and ancient citadel.
-- Minecraft-style volumetric translucent water with Beer-Lambert depth absorption, animated surface waves, Fresnel reflection, and seabed caustics.
-- Polyglot multi-language examples:
-  - C99 (`examples/c_example`): Device query, buffer initialization, texture rendering, and timeline semaphores.
-  - Modern C++17 (`examples/cpp_example`): RAII handles, GPU-to-GPU buffer copies, and `std::vector` readbacks.
-  - Zig 0.14 (`examples/zig_example`): `@cImport` integration, buffer allocation, and memory verification.
-- Convenience ergonomic helpers `lgpu::default_device()` / `Device::default_device()` and `Queue::run(encoder)` / `Device::run(&queue, encoder)`.
-- Architectural and safety documentation (`docs/ARCHITECTURE_AND_SAFETY.md`) comparing `lgpu` with `wgpu`, `vulkano`, and `kvark/blade`.
-- Dedicated CI release pipeline with pre-flight crates.io idempotency checks and maintainer release automation.
+- Voxel raymarching example (`example-voxel-renderer`) with DDA traversal, procedural
+  mountains, islands and a citadel.
+- Translucent water with Beer-Lambert absorption, animated waves, Fresnel reflection and
+  seabed caustics.
+- C99 (`examples/c_example`), C++17 (`examples/cpp_example`) and Zig 0.14
+  (`examples/zig_example`) examples using the shared header.
+- `lgpu::default_device()`, `Device::default_device()`, `Queue::run(encoder)` and
+  `Device::run(&queue, encoder)` helpers.
+- `docs/ARCHITECTURE_AND_SAFETY.md`.
+- A release workflow with pre-flight crates.io checks.
 
 ### Fixed
-- Soundness fix: `Arc<VulkanInstance>` retained in `Device` and `Queue` ensuring parent Vulkan instance outlives child devices during default device creation.
-- Suballocator memory reclamation: Automatically free completely empty memory blocks back to Vulkan (`vkFreeMemory`), keeping at most 1 empty block per memory type as a warm cache (#6).
-- Exposed `trim_memory()` and `suballocator_block_count()` on `Device`, `VulkanDevice`, and C FFI.
-- Surface swapchain deadlock fix: Implemented `Drop` for `SurfaceTexture` to cleanly signal in-flight frame fences and release acquired images back to the presentation engine if dropped without calling `present()` (#7).
-- Voxel renderer mouse look jumping on click by resetting last cursor position.
-- Smooth camera controls with sprint speed boost (`Shift`), vertical navigation (`Space` / `C`), and clamped frame deltas.
-- Early vertical bounds culling in voxel DDA to eliminate wasted steps into empty sky or void.
-
----
+- `Device` and `Queue` keep an `Arc<VulkanInstance>`, so the parent instance outlives its
+  devices.
+- Empty suballocator blocks are returned to Vulkan, keeping one warm block per memory
+  type (#6).
+- `trim_memory()` and `suballocator_block_count()` on `Device`, `VulkanDevice` and the C
+  API.
+- `SurfaceTexture` implements `Drop`, so an acquired image is returned to the presentation
+  engine if it is dropped without `present()` (#7).
+- Voxel example mouse look no longer jumps on click.
+- Camera movement in the voxel example: sprint on `Shift`, vertical movement on `Space`
+  and `C`, and clamped frame deltas.
+- The voxel DDA skips empty sky and void early.
 
 ## [0.1.2] - 2026-10-16
 
 ### Changed
-- Cleaned and organized integration test suite names.
-- Streamlined documentation comments across `Buffer` and memory suballocator.
-- Updated documentation and architecture guides to clearly specify project scope, safety invariants, and synchronization guarantees.
-
----
+- Integration test suites were renamed and organized.
+- Documentation comments on `Buffer` and the memory suballocator were rewritten.
+- The architecture guide now states project scope, safety invariants and
+  synchronization guarantees more precisely.
 
 ## [0.1.1] - 2026-10-16
 
 ### Added
-- Pipeline cache serialization and loading via `device.get_pipeline_cache_data()`.
-- Flexible blend state and component configuration (`BlendState`, `BlendComponent`, `BlendFactor`, `BlendOp`).
-- Configurable primitive topologies (`PointList`, `LineList`, `LineStrip`, `TriangleList`, `TriangleStrip`).
-- Rasterizer cull modes (`None`, `Front`, `Back`) and front-face winding (`Ccw`, `Cw`).
+- Pipeline cache serialization through `device.get_pipeline_cache_data()`.
+- `BlendState`, `BlendComponent`, `BlendFactor` and `BlendOp`.
+- Configurable primitive topologies.
+- Rasterizer cull modes and front face winding.
 - `GraphicsPipelineDesc` for structured pipeline creation.
-- Multi-pass compositing: `LoadOp<T>`, `ColorLoadOp`, `DepthLoadOp`, and scoped `encoder.begin_render_pass`.
-- Indexed and indirect drawing commands (`draw_indexed`, `draw_indirect`).
-- Buffer-to-buffer and texture-to-buffer memory copies on `CommandEncoder`.
-- Mipmapped and multi-sampled textures (MSAA) with sample count validation.
-- C99 FFI functions for device idling, native window surfaces, and surface presentation.
+- Multi-pass compositing with `LoadOp<T>`, `ColorLoadOp`, `DepthLoadOp` and
+  `encoder.begin_render_pass`.
+- Indexed and indirect draws.
+- Buffer to buffer and texture to buffer copies on `CommandEncoder`.
+- Mipmapped and multisampled textures with sample count validation.
+- C99 functions for device idling, native window surfaces and presentation.
 
 ### Fixed
-- Fixed surface swapchain texture ownership so dropping surface textures does not prematurely destroy swapchain images.
-- `CommandEncoder` rendering methods now return descriptive errors on parameter or descriptor overflows.
-- Automatically recycle unsubmitted command recorders back to the device pool on drop.
-- Replaced boolean fields in `LgpuAdapterInfo` with ABI-stable `uint8_t`.
-- Memory suballocator chunk size tracking during deallocation and chunk coalescing.
-- Ensured host-visible and device-local suballocations use separate memory blocks.
-- Thread-safe guards on mapped buffer writes and concurrent texture transitions.
-
----
+- Dropping a surface texture no longer destroys swapchain images.
+- `CommandEncoder` methods return errors on parameter and descriptor overflows.
+- Unsubmitted command recorders return to the device pool on drop.
+- `LgpuAdapterInfo` uses `uint8_t` instead of `bool` for ABI stability.
+- The memory suballocator tracks chunk sizes during deallocation and coalesces chunks.
+- Host visible and device local suballocations use separate memory blocks.
+- Mapped buffer writes and texture transitions are guarded for concurrent use.
 
 ## [0.1.0] - 2026-10-14
 
 ### Added
 - Initial release of `lgpu`.
-- Dynamic Vulkan 1.3 loader via `ash`.
-- Global bindless descriptor indexing heap (`update_after_bind`) for buffers, textures, and samplers.
-- Dynamic rendering support (`VK_KHR_dynamic_rendering`).
-- C99 FFI headers (`lgpu.h`).
-- Headless compute, dynamic clear, bindless triangle, and particle simulation examples.
+- Dynamic Vulkan 1.3 loading through `ash`.
+- Global bindless descriptor heap (`update_after_bind`) for buffers, textures and
+  samplers.
+- Dynamic rendering (`VK_KHR_dynamic_rendering`).
+- C99 FFI header (`lgpu.h`).
+- Headless compute, clear, bindless triangle and particle examples.

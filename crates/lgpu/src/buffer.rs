@@ -9,12 +9,16 @@ pub struct BufferId(pub u32);
 pub(crate) struct BufferSlotGuard {
     pub(crate) device: Arc<lgpu_hal::vulkan::VulkanDevice>,
     pub(crate) id: Option<BufferId>,
+    pub(crate) uniform_id: Option<BufferId>,
 }
 
 impl Drop for BufferSlotGuard {
     fn drop(&mut self) {
         if let Some(buf_id) = self.id {
             self.device.unregister_bindless_buffer(buf_id.0);
+        }
+        if let Some(uniform_id) = self.uniform_id {
+            self.device.unregister_bindless_uniform_buffer(uniform_id.0);
         }
     }
 }
@@ -24,6 +28,9 @@ pub struct Buffer {
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
     pub size: u64,
     pub id: Option<BufferId>,
+    /// Bindless slot for a uniform buffer descriptor, when the buffer was created with
+    /// `BufferUsage::UNIFORM`.
+    pub uniform_id: Option<BufferId>,
     pub(crate) slot_guard: Option<Arc<BufferSlotGuard>>,
     pub owned: bool,
 }
@@ -33,16 +40,23 @@ impl std::fmt::Debug for Buffer {
         f.debug_struct("Buffer")
             .field("size", &self.size)
             .field("id", &self.id)
+            .field("uniform_id", &self.uniform_id)
             .field("owned", &self.owned)
             .finish()
     }
 }
 
 impl Buffer {
-    /// Returns the optional bindless buffer identifier.
+    /// Returns the optional bindless storage buffer identifier.
     #[inline]
     pub fn id(&self) -> Option<BufferId> {
         self.id
+    }
+
+    /// Returns the optional bindless uniform buffer identifier.
+    #[inline]
+    pub fn uniform_id(&self) -> Option<BufferId> {
+        self.uniform_id
     }
 
     /// Returns whether this buffer instance owns the underlying GPU resource.
@@ -55,24 +69,13 @@ impl Buffer {
     /// neither prematurely unregister its bindless slot nor destroy the underlying Vulkan buffer.
     pub fn clone_unowned(&self) -> Self {
         Self {
-            hal_buffer: self
-                .hal_buffer
-                .as_ref()
-                .map(|b| lgpu_hal::vulkan::VulkanBuffer {
-                    buffer: b.buffer,
-                    memory: b.memory,
-                    block_id: b.block_id,
-                    offset: b.offset,
-                    size: b.size,
-                    allocated_size: b.allocated_size,
-                    mapped_ptr: b.mapped_ptr,
-                    is_coherent: b.is_coherent,
-                    sync_lock: std::sync::Mutex::new(()),
-                    owned: false,
-                }),
+            // Clones share the HAL buffer's mapping lock so concurrent host writes through
+            // different handles cannot race on the same mapped memory.
+            hal_buffer: self.hal_buffer.as_ref().map(|b| b.clone_unowned()),
             vulkan_device: Arc::clone(&self.vulkan_device),
             size: self.size,
             id: self.id,
+            uniform_id: self.uniform_id,
             slot_guard: self.slot_guard.clone(),
             owned: false,
         }

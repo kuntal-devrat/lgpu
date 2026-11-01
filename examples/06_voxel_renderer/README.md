@@ -1,45 +1,39 @@
-# Real-Time Voxel Renderer (`example-voxel-renderer`)
+# Voxel renderer (`example-voxel-renderer`)
 
-A real-time voxel raymarching engine built with **`lgpu`** modern Vulkan 1.3 dynamic rendering, Push Constants, and Amanatides & Woo Fast Voxel DDA (Digital Differential Analyzer).
-
----
+A voxel raymarcher written with `lgpu`, Vulkan 1.3 dynamic rendering, push constants and
+the Amanatides and Woo voxel DDA.
 
 ## Features
 
-- **Digital Differential Analyzer (DDA)**: Pixel-perfect voxel raymarching executed directly in the fragment shader with up to 140 traversal steps per ray.
-- **Minecraft-Style Translucent Water**:
-  - **Beer-Lambert Light Absorption**: Realistic underwater depth attenuation for realistic aquatic clarity and deep blues.
-  - **Animated Surface Waves**: Multi-frequency sine perturbation simulating fluid surface rippling.
-  - **Fresnel Reflection**: Schlick approximation reflecting the atmospheric skybox based on viewing angles.
-  - **Seabed Caustics**: Animated light patterns projecting onto underwater sand and stone.
-  - **Underwater Camera Fog**: Dynamic tint and atmospheric fog when the camera dives below the water line.
-- **Multiple Voxel Worlds**:
-  - **1: Mountain Highlands & Lakes**: Rolling alpine terrain with pine trees, sandy beaches, underwater depth, and mineral veins.
-  - **2: Floating Sky Islands**: Overhanging islands with gravity-defying terrain and vertical drops.
-  - **3: Ancient Citadel**: Step pyramid ruins with battlements and river plains.
-- **Dynamic Lighting & Voxel Shadows**: Secondary DDA shadow rays cast towards an animated sun light source.
-- **Voxel Ambient Occlusion (AO)**: Corner darkening based on neighboring solid blocks.
-- **Shader in Clean WGSL**: The shader is written in plain-text modern WGSL ([`shaders/voxel.wgsl`](shaders/voxel.wgsl)) and compiled to SPIR-V at runtime via Naga in ~2ms.
-
----
+- Fragment shader voxel traversal with up to 140 DDA steps per ray.
+- Translucent water:
+  - Beer-Lambert absorption for depth dependent colour.
+  - Animated surface waves from summed sine functions.
+  - Schlick Fresnel reflection of the sky.
+  - Animated caustics on the seabed.
+  - Underwater fog and tint when the camera is below the water line.
+- Three worlds: alpine highlands with lakes and trees, floating sky islands, and a
+  step pyramid citadel.
+- Shadow rays traced towards an animated sun.
+- Corner based ambient occlusion from neighbouring solid voxels.
+- The shader is plain WGSL in [`shaders/voxel.wgsl`](shaders/voxel.wgsl) and is compiled
+  to SPIR-V at startup with Naga.
 
 ## Controls
 
-| Key / Input | Action |
+| Input | Action |
 | :--- | :--- |
-| **`W`, `A`, `S`, `D`** | Fly forward, left, backward, right |
-| **`Space`** | Ascend (fly up) |
-| **`C` / `Ctrl`** | Descend (fly down) |
-| **`Shift` (Hold)** | Sprint boost (2.5x fly speed) |
-| **Mouse Left-Drag** | Rotate camera (smooth look around) |
-| **Arrow Keys** | Alternative camera rotation |
-| **`1`, `2`, `3`** | Switch voxel world mode |
-| **`Tab`** | Cycle render modes (Beauty, Ambient Occlusion, Normals, Depth, Voxel IDs) |
-| **`T`** | Toggle animated day/night sun cycle |
-| **`R`** | Reset camera to initial spawn position |
-| **`Esc`** | Exit application |
-
----
+| `W`, `A`, `S`, `D` | Fly forward, left, backward, right |
+| `Space` | Fly up |
+| `C` or `Ctrl` | Fly down |
+| `Shift` (hold) | Sprint, 2.5x fly speed |
+| Left mouse drag | Rotate the camera |
+| Arrow keys | Rotate the camera |
+| `1`, `2`, `3` | Switch world |
+| `Tab` | Cycle render mode: beauty, ambient occlusion, normals, depth, voxel IDs |
+| `T` | Toggle the day and night cycle |
+| `R` | Reset the camera to the spawn point |
+| `Esc` | Exit |
 
 ## Running
 

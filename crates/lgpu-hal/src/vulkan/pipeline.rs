@@ -102,20 +102,48 @@ impl VulkanDevice {
             .pool_sizes(&pool_sizes)
             .max_sets(1);
 
-        let descriptor_pool = unsafe {
-            self.device
-                .create_descriptor_pool(&pool_info, None)
-                .map_err(|e| HalError::PipelineError(e.to_string()))?
+        let descriptor_pool = match unsafe { self.device.create_descriptor_pool(&pool_info, None) }
+        {
+            Ok(pool) => pool,
+            Err(e) => {
+                unsafe {
+                    self.device.destroy_pipeline(pipelines[0], None);
+                    self.device.destroy_pipeline_layout(layout, None);
+                    self.device
+                        .destroy_descriptor_set_layout(descriptor_set_layout, None);
+                }
+                return Err(HalError::PipelineError(e.to_string()));
+            }
         };
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
 
-        let descriptor_sets = unsafe {
-            self.device
-                .allocate_descriptor_sets(&alloc_info)
-                .map_err(|e| HalError::PipelineError(e.to_string()))?
+        let descriptor_sets = match unsafe { self.device.allocate_descriptor_sets(&alloc_info) } {
+            Ok(sets) if !sets.is_empty() => sets,
+            Ok(_) => {
+                unsafe {
+                    self.device.destroy_descriptor_pool(descriptor_pool, None);
+                    self.device.destroy_pipeline(pipelines[0], None);
+                    self.device.destroy_pipeline_layout(layout, None);
+                    self.device
+                        .destroy_descriptor_set_layout(descriptor_set_layout, None);
+                }
+                return Err(HalError::PipelineError(
+                    "Compute descriptor set allocation returned no sets".to_string(),
+                ));
+            }
+            Err(e) => {
+                unsafe {
+                    self.device.destroy_descriptor_pool(descriptor_pool, None);
+                    self.device.destroy_pipeline(pipelines[0], None);
+                    self.device.destroy_pipeline_layout(layout, None);
+                    self.device
+                        .destroy_descriptor_set_layout(descriptor_set_layout, None);
+                }
+                return Err(HalError::PipelineError(e.to_string()));
+            }
         };
 
         Ok(VulkanComputePipeline {
@@ -224,6 +252,7 @@ impl VulkanDevice {
             sample_count,
             primitive: crate::PrimitiveState::default(),
             blend: None,
+            vertex_buffers: Vec::new(),
         };
         self.create_graphics_pipeline_with_desc(shader, &desc)
     }
@@ -253,7 +282,52 @@ impl VulkanDevice {
                 .name(&fs_name),
         ];
 
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
+        let mut binding_descriptions = Vec::with_capacity(desc.vertex_buffers.len());
+        let mut attribute_descriptions = Vec::new();
+        let mut seen_locations = std::collections::HashSet::new();
+
+        for (binding, layout) in desc.vertex_buffers.iter().enumerate() {
+            if layout.stride == 0 {
+                return Err(HalError::InvalidParameter(format!(
+                    "Vertex buffer layout {binding} has a stride of 0"
+                )));
+            }
+
+            binding_descriptions.push(
+                vk::VertexInputBindingDescription::default()
+                    .binding(binding as u32)
+                    .stride(layout.stride)
+                    .input_rate(layout.step_mode.to_vk()),
+            );
+
+            for attribute in &layout.attributes {
+                if !seen_locations.insert(attribute.location) {
+                    return Err(HalError::InvalidParameter(format!(
+                        "Vertex attribute location {} is declared more than once",
+                        attribute.location
+                    )));
+                }
+                let end = attribute.offset as u64 + attribute.format.size() as u64;
+                if end > layout.stride as u64 {
+                    return Err(HalError::InvalidParameter(format!(
+                        "Vertex attribute at location {} ends at byte {end}, past the stride of {}",
+                        attribute.location, layout.stride
+                    )));
+                }
+
+                attribute_descriptions.push(
+                    vk::VertexInputAttributeDescription::default()
+                        .location(attribute.location)
+                        .binding(binding as u32)
+                        .format(attribute.format.to_vk())
+                        .offset(attribute.offset),
+                );
+            }
+        }
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(desc.primitive.topology.to_vk())
@@ -328,7 +402,7 @@ impl VulkanDevice {
             vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&vk_color_formats);
 
         let vk_depth_format = match desc.depth_format {
-            Some(TextureFormat::Depth32Float) => Some(vk::Format::D32_SFLOAT),
+            Some(f) if f.is_depth() => Some(f.to_vk()),
             Some(f) => {
                 return Err(HalError::BackendError(format!(
                     "Unsupported depth format: {f:?}"

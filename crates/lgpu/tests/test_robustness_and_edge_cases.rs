@@ -2,7 +2,7 @@
 
 use lgpu::{
     BufferDesc, BufferUsage, Error, HalError, MemoryLocation, PresentMode, SurfaceConfiguration,
-    TextureDesc, TextureFormat, TextureUsage,
+    TextureDesc, TextureDimension, TextureFormat, TextureUsage,
 };
 use std::sync::Arc;
 use std::thread;
@@ -50,6 +50,8 @@ fn test_resource_creation_error_paths() {
         width: 0,
         height: 64,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -67,6 +69,8 @@ fn test_resource_creation_error_paths() {
         width: 64,
         height: 0,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -406,4 +410,82 @@ fn test_create_shader_wgsl() {
         err_shader.is_err(),
         "create_shader_wgsl with invalid syntax should fail"
     );
+}
+
+#[test]
+fn test_texture_descriptor_and_upload_validation() {
+    let (_instance, device, _queue) = require_gpu!();
+
+    // Non power-of-two sample counts must be rejected instead of silently becoming a
+    // single-sample image that no longer matches the pipeline's rasterization samples.
+    let bad_samples = TextureDesc {
+        label: Some("BadSamples"),
+        width: 32,
+        height: 32,
+        depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
+        mip_levels: 1,
+        sample_count: 3,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsage::RENDER_ATTACHMENT,
+    };
+    assert!(
+        matches!(
+            device.create_texture(&bad_samples),
+            Err(Error::Hal(HalError::InvalidParameter(_)))
+        ),
+        "sample_count of 3 must be rejected"
+    );
+
+    // A 16x16 image supports at most 5 mip levels; asking for more is invalid Vulkan state.
+    let too_many_mips = TextureDesc {
+        label: Some("TooManyMips"),
+        width: 16,
+        height: 16,
+        depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
+        mip_levels: 6,
+        sample_count: 1,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsage::TEXTURE_BINDING,
+    };
+    assert!(
+        matches!(
+            device.create_texture(&too_many_mips),
+            Err(Error::Hal(HalError::InvalidParameter(_)))
+        ),
+        "6 mip levels for a 16x16 texture must be rejected"
+    );
+
+    // An upload smaller than one tightly packed mip level must fail instead of copying
+    // stale staging bytes into the image.
+    let tex = device
+        .create_texture(&TextureDesc {
+            label: Some("UploadTarget"),
+            width: 8,
+            height: 8,
+            depth: 1,
+            dimension: TextureDimension::D2,
+            array_layers: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsage::TEXTURE_BINDING | TextureUsage::COPY_DST,
+        })
+        .expect("create upload target");
+    let short_upload = vec![0u8; 8 * 8 * 4 - 1];
+    assert!(
+        matches!(
+            device.write_texture(&tex, &short_upload),
+            Err(Error::Hal(HalError::InvalidParameter(_)))
+        ),
+        "short texture upload must be rejected"
+    );
+
+    // The exact-size upload must still succeed.
+    device
+        .write_texture(&tex, &vec![7u8; 8 * 8 * 4])
+        .expect("full-size texture upload must succeed");
 }

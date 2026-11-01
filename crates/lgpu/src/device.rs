@@ -1,10 +1,11 @@
 //! Logical GPU device and queue submission.
 
+use crate::MemoryLocation;
 use crate::{
     BindlessComputePipeline, Buffer, BufferDesc, BufferId, BufferUsage, CommandBuffer,
     CommandEncoder, ComputePipeline, Error, GraphicsPipeline, Sampler, SamplerDesc, SamplerId,
     Shader, SurfaceTexture, Texture, TextureDesc, TextureFormat, TextureId, TextureUsage,
-    TimelineSemaphore,
+    TimelineSemaphore, TimestampPool,
 };
 use std::sync::Arc;
 
@@ -13,9 +14,39 @@ pub struct Device {
     pub(crate) _instance: Arc<lgpu_hal::vulkan::VulkanInstance>,
 }
 
+/// Which physical queue a [`Queue`] handle submits to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueFamily {
+    /// Graphics (and compute) queue returned by `request_device`.
+    Graphics,
+    /// Dedicated compute queue, when the adapter exposes a separate compute family.
+    Compute,
+}
+
 pub struct Queue {
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
     pub(crate) _instance: Arc<lgpu_hal::vulkan::VulkanInstance>,
+    pub(crate) family: QueueFamily,
+}
+
+impl Queue {
+    pub fn family(&self) -> QueueFamily {
+        self.family
+    }
+
+    pub fn is_compute(&self) -> bool {
+        self.family == QueueFamily::Compute
+    }
+
+    fn family_index(&self) -> u32 {
+        match self.family {
+            QueueFamily::Graphics => self.vulkan_device.queue_family_index,
+            QueueFamily::Compute => self
+                .vulkan_device
+                .compute_queue_family_index
+                .unwrap_or(self.vulkan_device.queue_family_index),
+        }
+    }
 }
 
 impl Device {
@@ -74,20 +105,43 @@ impl Device {
     /// ```
     pub fn create_buffer(&self, desc: &BufferDesc) -> Result<Buffer, Error> {
         let hal_buffer = self.vulkan_device.create_buffer(desc)?;
-        let id = if desc.usage.contains(BufferUsage::STORAGE)
-            && self.vulkan_device.bindless_heap.is_some()
-        {
-            Some(BufferId(
-                self.vulkan_device.register_bindless_buffer(&hal_buffer)?,
-            ))
+        let bindless_enabled = self.vulkan_device.bindless_heap.is_some();
+
+        let id = if desc.usage.contains(BufferUsage::STORAGE) && bindless_enabled {
+            match self.vulkan_device.register_bindless_buffer(&hal_buffer) {
+                Ok(slot) => Some(BufferId(slot)),
+                Err(e) => {
+                    self.vulkan_device.destroy_buffer(hal_buffer);
+                    return Err(e.into());
+                }
+            }
         } else {
             None
         };
 
-        let slot_guard = if id.is_some() {
+        let uniform_id = if desc.usage.contains(BufferUsage::UNIFORM) && bindless_enabled {
+            match self
+                .vulkan_device
+                .register_bindless_uniform_buffer(&hal_buffer)
+            {
+                Ok(slot) => Some(BufferId(slot)),
+                Err(e) => {
+                    if let Some(id) = id {
+                        self.vulkan_device.unregister_bindless_buffer(id.0);
+                    }
+                    self.vulkan_device.destroy_buffer(hal_buffer);
+                    return Err(e.into());
+                }
+            }
+        } else {
+            None
+        };
+
+        let slot_guard = if id.is_some() || uniform_id.is_some() {
             Some(Arc::new(crate::buffer::BufferSlotGuard {
                 device: Arc::clone(&self.vulkan_device),
                 id,
+                uniform_id,
             }))
         } else {
             None
@@ -98,6 +152,7 @@ impl Device {
             vulkan_device: Arc::clone(&self.vulkan_device),
             size: desc.size,
             id,
+            uniform_id,
             slot_guard,
             owned: true,
         })
@@ -335,6 +390,25 @@ impl Device {
         Ok(())
     }
 
+    /// Performs a batched update of bindless uniform buffer descriptors in a single driver call.
+    pub fn write_uniform_buffer_descriptors_batch(
+        &self,
+        writes: &[(u32, &Buffer)],
+    ) -> Result<(), Error> {
+        let mut raw = Vec::with_capacity(writes.len());
+        for (slot, buf) in writes {
+            let hal_buf = buf.hal_buffer.as_ref().ok_or_else(|| {
+                Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                    "Buffer hal resource is missing or destroyed".to_string(),
+                ))
+            })?;
+            raw.push((*slot, hal_buf));
+        }
+        self.vulkan_device
+            .write_uniform_buffer_descriptors_batch(&raw)?;
+        Ok(())
+    }
+
     pub fn create_graphics_pipeline(
         &self,
         shader: &Shader,
@@ -402,6 +476,40 @@ impl Device {
         })
     }
 
+    /// Returns a handle to the dedicated async compute queue, when the adapter exposes one.
+    ///
+    /// Command buffers recorded through [`Device::create_compute_command_encoder`] can be
+    /// submitted through it. Buffers and textures are created with concurrent sharing, so they
+    /// are usable from either queue without ownership transfers.
+    pub fn compute_queue(&self) -> Option<Queue> {
+        self.vulkan_device.compute_queue.as_ref()?;
+        Some(Queue {
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            _instance: Arc::clone(&self._instance),
+            family: QueueFamily::Compute,
+        })
+    }
+
+    /// Whether this device has a queue family distinct from the graphics queue for compute work.
+    pub fn has_async_compute_queue(&self) -> bool {
+        self.vulkan_device.compute_queue.is_some()
+    }
+
+    /// Queue family index used by the async compute queue, if any.
+    pub fn compute_queue_family_index(&self) -> Option<u32> {
+        self.vulkan_device.compute_queue_family_index
+    }
+
+    /// Creates an encoder whose command buffer targets the async compute queue family.
+    pub fn create_compute_command_encoder(&self) -> Result<CommandEncoder, Error> {
+        let recorder = self.vulkan_device.create_compute_command_recorder()?;
+        Ok(CommandEncoder {
+            recorder: Some(recorder),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            vertex_buffers: Vec::new(),
+        })
+    }
+
     /// Creates a new [`CommandEncoder`] for recording graphics and compute commands.
     ///
     /// # Example
@@ -420,6 +528,7 @@ impl Device {
         Ok(CommandEncoder {
             recorder: Some(recorder),
             vulkan_device: Arc::clone(&self.vulkan_device),
+            vertex_buffers: Vec::new(),
         })
     }
 
@@ -439,6 +548,98 @@ impl Device {
     pub fn wait_idle(&self) -> Result<(), Error> {
         self.vulkan_device.wait_idle()?;
         Ok(())
+    }
+
+    /// Returns the serialized pipeline cache. Persist it and pass it to
+    /// [`crate::Adapter::request_device_with_cache`] to skip pipeline compilation on the next run.
+    pub fn pipeline_cache_data(&self) -> Result<Vec<u8>, Error> {
+        Ok(self.vulkan_device.get_pipeline_cache_data()?)
+    }
+
+    /// Number of valid bits in GPU timestamps for this device's queue. Zero means that
+    /// timestamps are not supported on the selected queue family.
+    pub fn timestamp_valid_bits(&self) -> u32 {
+        self.vulkan_device.timestamp_valid_bits
+    }
+
+    /// Creates a pool of GPU timestamp queries.
+    pub fn create_timestamp_pool(&self, count: u32) -> Result<TimestampPool, Error> {
+        let pool = self.vulkan_device.create_timestamp_query_pool(count)?;
+        Ok(TimestampPool {
+            pool: Some(pool),
+            vulkan_device: Arc::clone(&self.vulkan_device),
+            count,
+        })
+    }
+
+    /// Uploads one mip level of a texture. `row_pitch` is in bytes; `None` means tightly packed.
+    pub fn write_texture_mip(
+        &self,
+        texture: &Texture,
+        mip_level: u32,
+        data: &[u8],
+        row_pitch: Option<u32>,
+    ) -> Result<(), Error> {
+        let raw_texture = texture.hal_texture.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Texture hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device
+            .write_texture_mip(raw_texture, mip_level, data, row_pitch)?;
+        Ok(())
+    }
+
+    /// Generates the whole mip chain with GPU blits. The texture must have been created with
+    /// `TEXTURE_BINDING | COPY_SRC | COPY_DST` and more than one mip level.
+    pub fn generate_mipmaps(&self, texture: &Texture) -> Result<(), Error> {
+        let raw_texture = texture.hal_texture.as_ref().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Texture hal resource is missing or destroyed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.generate_mipmaps(raw_texture)?;
+        Ok(())
+    }
+
+    /// Creates a device-local buffer and uploads `data` through a staging buffer.
+    pub fn create_buffer_init_device_local(
+        &self,
+        desc: &BufferDesc,
+        data: &[u8],
+    ) -> Result<Buffer, Error> {
+        if (data.len() as u64) > desc.size {
+            return Err(Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                "Upload of {} bytes exceeds the buffer size of {}",
+                data.len(),
+                desc.size
+            ))));
+        }
+
+        let mut local_desc = desc.clone();
+        local_desc.usage |= BufferUsage::TRANSFER_DST;
+        let buffer = self.create_buffer(&local_desc)?;
+
+        let staging = self.create_buffer_init(
+            &BufferDesc {
+                label: Some("lgpu_device_local_upload"),
+                size: data.len().max(1) as u64,
+                usage: BufferUsage::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+            data,
+        )?;
+
+        let mut encoder = self.create_command_encoder()?;
+        encoder.copy_buffer_to_buffer(&staging, 0, &buffer, 0, data.len() as u64);
+        let mut command_buffer = encoder.finish();
+        let recorder = command_buffer.recorder.take().ok_or_else(|| {
+            Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "CommandBuffer already consumed".to_string(),
+            ))
+        })?;
+        self.vulkan_device.submit_and_wait(recorder)?;
+        Ok(buffer)
     }
 
     pub fn write_texture(&self, texture: &Texture, data: &[u8]) -> Result<(), Error> {
@@ -511,7 +712,10 @@ impl Queue {
                 "CommandBuffer already consumed".to_string(),
             ))
         })?;
-        self.vulkan_device.submit_and_wait(recorder)?;
+        match self.family {
+            QueueFamily::Graphics => self.vulkan_device.submit_and_wait(recorder)?,
+            QueueFamily::Compute => self.vulkan_device.submit_compute_and_wait(recorder)?,
+        }
         Ok(())
     }
 
@@ -522,6 +726,11 @@ impl Queue {
         mut command_buffer: CommandBuffer,
         surface_texture: &SurfaceTexture,
     ) -> Result<(), Error> {
+        if self.family != QueueFamily::Graphics {
+            return Err(Error::Hal(lgpu_hal::HalError::InvalidParameter(
+                "Surface work must be submitted on the graphics queue".to_string(),
+            )));
+        }
         let recorder = command_buffer.recorder.take().ok_or_else(|| {
             Error::Hal(lgpu_hal::HalError::InvalidParameter(
                 "CommandBuffer already consumed".to_string(),
@@ -559,7 +768,12 @@ impl Queue {
             })?;
             recorders.push(r);
         }
-        self.vulkan_device.submit_batches_and_wait(recorders)?;
+        match self.family {
+            QueueFamily::Graphics => self.vulkan_device.submit_batches_and_wait(recorders)?,
+            QueueFamily::Compute => self
+                .vulkan_device
+                .submit_compute_batches_and_wait(recorders)?,
+        }
         Ok(())
     }
 
@@ -605,8 +819,12 @@ impl Queue {
             })?;
             raw_signal.push((sem, *v));
         }
-        self.vulkan_device
-            .submit_batches_async(recorders, &raw_wait, &raw_signal)?;
+        self.vulkan_device.submit_batches_async_on(
+            self.family_index(),
+            recorders,
+            &raw_wait,
+            &raw_signal,
+        )?;
         Ok(())
     }
 

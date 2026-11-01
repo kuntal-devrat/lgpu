@@ -8,6 +8,13 @@ use std::ffi::CString;
 use super::{allocator, bindless, VulkanDevice};
 use crate::{AdapterInfo, Backend, DeviceType, HalError};
 
+/// Validation errors are logged by default. Set `LGPU_PANIC_ON_VALIDATION=1` to turn them
+/// into panics, which is useful when debugging a driver or synchronization problem.
+fn validation_panics_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("LGPU_PANIC_ON_VALIDATION").is_some())
+}
+
 unsafe extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     _message_types: vk::DebugUtilsMessageTypeFlagsEXT,
@@ -23,7 +30,9 @@ unsafe extern "system" fn vulkan_debug_callback(
     if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         tracing::error!("[Vulkan Validation ERROR]: {message}");
         eprintln!("[Vulkan Validation ERROR]: {message}");
-        panic!("[Vulkan Validation ERROR]: {message}");
+        if validation_panics_enabled() {
+            panic!("[Vulkan Validation ERROR]: {message}");
+        }
     } else if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
         tracing::warn!("[Vulkan Validation WARNING]: {message}");
         eprintln!("[Vulkan Validation WARNING]: {message}");
@@ -46,8 +55,12 @@ pub struct VulkanAdapter {
     pub physical_device: vk::PhysicalDevice,
     pub info: AdapterInfo,
     pub queue_family_index: u32,
+    /// Compute-only (or at least compute-capable) family distinct from the graphics family.
+    pub compute_queue_family_index: Option<u32>,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub non_coherent_atom_size: u64,
+    /// Number of valid bits in timestamps written on the selected queue, 0 when unsupported.
+    pub timestamp_valid_bits: u32,
 }
 
 impl VulkanInstance {
@@ -319,6 +332,31 @@ impl VulkanInstance {
                 Some(idx) => idx,
                 None => continue,
             };
+            let timestamp_valid_bits =
+                queue_props[queue_family_index as usize].timestamp_valid_bits;
+
+            // Pick a second queue family for asynchronous compute, preferring one without
+            // graphics so draws and dispatches can overlap.
+            let mut compute_queue_family_index = None;
+            let mut best_rank = u8::MAX;
+            for (idx, qp) in queue_props.iter().enumerate() {
+                let idx = idx as u32;
+                if idx == queue_family_index
+                    || qp.queue_count == 0
+                    || !qp.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                {
+                    continue;
+                }
+                let rank = if qp.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                    1
+                } else {
+                    0
+                };
+                if rank < best_rank {
+                    best_rank = rank;
+                    compute_queue_family_index = Some(idx);
+                }
+            }
 
             let name_bytes: Vec<u8> = props
                 .device_name
@@ -429,8 +467,10 @@ impl VulkanInstance {
                 physical_device: pd,
                 info: adapter_info,
                 queue_family_index,
+                compute_queue_family_index,
                 memory_properties: mem_props,
                 non_coherent_atom_size: props.limits.non_coherent_atom_size,
+                timestamp_valid_bits,
             });
         }
 
@@ -438,12 +478,29 @@ impl VulkanInstance {
     }
 
     pub fn create_device(&self, adapter: &VulkanAdapter) -> Result<VulkanDevice, HalError> {
+        self.create_device_with_cache(adapter, None)
+    }
+
+    /// Creates a logical device, seeding its pipeline cache with previously serialized data
+    /// (see `VulkanDevice::get_pipeline_cache_data`).
+    pub fn create_device_with_cache(
+        &self,
+        adapter: &VulkanAdapter,
+        initial_pipeline_cache: Option<&[u8]>,
+    ) -> Result<VulkanDevice, HalError> {
         let queue_priorities = [1.0f32];
-        let queue_create_info = vk::DeviceQueueCreateInfo::default()
+        let graphics_queue_info = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(adapter.queue_family_index)
             .queue_priorities(&queue_priorities);
 
-        let queue_infos = [queue_create_info];
+        let mut queue_infos = vec![graphics_queue_info];
+        if let Some(family) = adapter.compute_queue_family_index {
+            queue_infos.push(
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(family)
+                    .queue_priorities(&queue_priorities),
+            );
+        }
 
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
@@ -455,6 +512,8 @@ impl VulkanInstance {
             .shader_sampled_image_array_non_uniform_indexing(true)
             .shader_storage_buffer_array_non_uniform_indexing(true)
             .shader_storage_image_array_non_uniform_indexing(true)
+            .shader_uniform_buffer_array_non_uniform_indexing(true)
+            .descriptor_binding_uniform_buffer_update_after_bind(true)
             .descriptor_binding_sampled_image_update_after_bind(true)
             .descriptor_binding_storage_buffer_update_after_bind(true)
             .descriptor_binding_storage_image_update_after_bind(true)
@@ -510,6 +569,13 @@ impl VulkanInstance {
         };
 
         let queue = unsafe { device.get_device_queue(adapter.queue_family_index, 0) };
+        let compute_queue = adapter
+            .compute_queue_family_index
+            .map(|family| unsafe { device.get_device_queue(family, 0) });
+        let mut queue_family_indices = vec![adapter.queue_family_index];
+        if let Some(family) = adapter.compute_queue_family_index {
+            queue_family_indices.push(family);
+        }
 
         let swapchain_loader = if swapchain_supported {
             Some(swapchain::Device::new(&self.instance, &device))
@@ -520,6 +586,7 @@ impl VulkanInstance {
         let bindless_heap = bindless::VulkanBindlessHeap::new(
             &device,
             bindless::DEFAULT_MAX_STORAGE_BUFFERS,
+            bindless::DEFAULT_MAX_UNIFORM_BUFFERS,
             bindless::DEFAULT_MAX_TEXTURES,
             bindless::DEFAULT_MAX_SAMPLERS,
             bindless::DEFAULT_MAX_STORAGE_IMAGES,
@@ -541,7 +608,10 @@ impl VulkanInstance {
         };
 
         let pipeline_cache = unsafe {
-            let cache_info = vk::PipelineCacheCreateInfo::default();
+            let mut cache_info = vk::PipelineCacheCreateInfo::default();
+            if let Some(data) = initial_pipeline_cache {
+                cache_info = cache_info.initial_data(data);
+            }
             device
                 .create_pipeline_cache(&cache_info, None)
                 .map_err(|e| {
@@ -556,16 +626,28 @@ impl VulkanInstance {
         )
         .ok();
 
+        let debug_utils_device = if self.debug_utils.is_some() {
+            Some(ash::ext::debug_utils::Device::new(&self.instance, &device))
+        } else {
+            None
+        };
+
         Ok(VulkanDevice {
             device,
             physical_device: adapter.physical_device,
             queue: std::sync::Mutex::new(queue),
             queue_family_index: adapter.queue_family_index,
+            compute_queue: compute_queue.map(std::sync::Mutex::new),
+            compute_queue_family_index: adapter.compute_queue_family_index,
+            queue_family_indices,
             memory_properties: adapter.memory_properties,
             non_coherent_atom_size: adapter.non_coherent_atom_size,
+            timestamp_valid_bits: adapter.timestamp_valid_bits,
             bindless_heap,
             swapchain_loader,
+            debug_utils_device,
             command_recorder_cache: std::sync::Mutex::new(Vec::new()),
+            compute_recorder_cache: std::sync::Mutex::new(Vec::new()),
             fence_cache: std::sync::Mutex::new(Vec::new()),
             internal_frame_semaphore,
             internal_frame_counter: std::sync::atomic::AtomicU64::new(0),

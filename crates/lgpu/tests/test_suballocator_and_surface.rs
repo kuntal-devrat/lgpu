@@ -2,7 +2,7 @@
 
 use lgpu::{
     BufferDesc, BufferUsage, Instance, MemoryLocation, PresentMode, SurfaceConfiguration,
-    TextureDesc, TextureFormat, TextureUsage,
+    TextureDesc, TextureDimension, TextureFormat, TextureUsage,
 };
 
 #[test]
@@ -86,6 +86,8 @@ fn test_linear_vs_optimal_block_separation() {
                 width: 32,
                 height: 32,
                 depth: 1,
+                dimension: TextureDimension::D2,
+                array_layers: 1,
                 mip_levels: 1,
                 sample_count: 1,
                 format: TextureFormat::Rgba8Unorm,

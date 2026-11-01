@@ -10,6 +10,8 @@ members = [
     "examples/04_bindless_100k",
     "examples/05_window_shader",
     "examples/06_voxel_renderer",
+    "examples/07_textured_mesh",
+    "examples/08_windowed_mesh",
 ]
 
 [workspace.package]

@@ -63,7 +63,7 @@ fn test_burst_texture_uploads_under_continuous_resizing() {
             "Surface configure must succeed at ({width}x{height})"
         );
 
-        // Minimized / zero-sized window: get_current_texture returns NotReady gracefully
+        // Minimized window: get_current_texture reports NotReady
         if width == 0 || height == 0 {
             let acquire_res = surface.get_current_texture();
             assert!(

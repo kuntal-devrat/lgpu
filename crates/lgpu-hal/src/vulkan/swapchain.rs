@@ -79,12 +79,6 @@ impl VulkanDevice {
             image_count = caps.max_image_count;
         }
 
-        if formats.is_empty() {
-            return Err(HalError::BackendError(
-                "No supported surface formats found for swapchain creation".to_string(),
-            ));
-        }
-
         let default_format = formats[0];
         let selected_format = if let Some(pref) = preferred_format {
             formats
@@ -221,7 +215,11 @@ impl VulkanDevice {
         };
         match res {
             Ok((idx, suboptimal)) => Ok((idx, suboptimal)),
-            Err(vk::Result::SUBOPTIMAL_KHR) => Ok((0, true)),
+            // `ash` already reports suboptimal acquisition as `Ok((index, true))`. Failing instead
+            // of inventing an image index keeps a stale swapchain from drawing into image 0.
+            Err(vk::Result::SUBOPTIMAL_KHR) => Err(HalError::Suboptimal(
+                "acquire_next_image returned VK_SUBOPTIMAL_KHR without an image index".to_string(),
+            )),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(HalError::OutOfDate(
                 "acquire_next_image returned VK_ERROR_OUT_OF_DATE_KHR".to_string(),
             )),

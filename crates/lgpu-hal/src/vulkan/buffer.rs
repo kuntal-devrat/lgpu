@@ -13,7 +13,9 @@ pub struct VulkanBuffer {
     pub allocated_size: u64,
     pub mapped_ptr: Option<*mut u8>,
     pub is_coherent: bool,
-    pub sync_lock: std::sync::Mutex<()>,
+    /// Shared with every clone of this buffer, so CPU-side mapped writes/reads stay mutually
+    /// exclusive even when different `Buffer` handles point at the same memory range.
+    pub sync_lock: std::sync::Arc<std::sync::Mutex<()>>,
     pub owned: bool,
 }
 
@@ -28,7 +30,7 @@ impl VulkanBuffer {
             allocated_size: self.allocated_size,
             mapped_ptr: self.mapped_ptr,
             is_coherent: self.is_coherent,
-            sync_lock: std::sync::Mutex::new(()),
+            sync_lock: std::sync::Arc::clone(&self.sync_lock),
             owned: false,
         }
     }
@@ -68,10 +70,14 @@ impl VulkanDevice {
             vk_usage |= vk::BufferUsageFlags::INDIRECT_BUFFER;
         }
 
+        // Concurrent sharing lets the graphics and async compute queues use the buffer without
+        // ownership transfers. A single family keeps the cheaper exclusive mode.
+        let (sharing_mode, sharing_families) = self.sharing();
         let buffer_info = vk::BufferCreateInfo::default()
             .size(desc.size)
             .usage(vk_usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .sharing_mode(sharing_mode)
+            .queue_family_indices(sharing_families);
 
         let buffer = unsafe {
             self.device
@@ -118,6 +124,11 @@ impl VulkanDevice {
                     };
                     alloc_lock.free(block_id, alloc.offset, mem_reqs.size, &self.device);
                 } else {
+                    // Dedicated allocations are mapped by the suballocator; Vulkan requires the
+                    // memory to be unmapped before it is freed.
+                    if alloc.mapped_ptr.is_some() {
+                        self.device.unmap_memory(alloc.memory);
+                    }
                     self.device.free_memory(alloc.memory, None);
                 }
                 self.device.destroy_buffer(buffer, None);
@@ -136,7 +147,7 @@ impl VulkanDevice {
             allocated_size: mem_reqs.size,
             mapped_ptr: alloc.mapped_ptr,
             is_coherent: alloc.is_coherent,
-            sync_lock: std::sync::Mutex::new(()),
+            sync_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
             owned: true,
         })
     }
@@ -298,6 +309,36 @@ impl VulkanDevice {
         if let Some(heap) = &self.bindless_heap {
             heap.free_buffer_slot(slot);
         }
+    }
+
+    pub fn register_bindless_uniform_buffer(&self, buffer: &VulkanBuffer) -> Result<u32, HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+        let slot = heap.allocate_uniform_buffer_slot()?;
+        heap.write_uniform_buffer_descriptor(&self.device, slot, buffer.buffer, buffer.size);
+        Ok(slot)
+    }
+
+    pub fn unregister_bindless_uniform_buffer(&self, slot: u32) {
+        if let Some(heap) = &self.bindless_heap {
+            heap.free_uniform_buffer_slot(slot);
+        }
+    }
+
+    pub fn write_uniform_buffer_descriptors_batch(
+        &self,
+        writes: &[(u32, &VulkanBuffer)],
+    ) -> Result<(), HalError> {
+        let heap = self.bindless_heap.as_ref().ok_or_else(|| {
+            HalError::BackendError("Bindless descriptor heap is not enabled".to_string())
+        })?;
+        let raw_writes: Vec<(u32, ash::vk::Buffer, u64)> = writes
+            .iter()
+            .map(|(slot, buf)| (*slot, buf.buffer, buf.size))
+            .collect();
+        heap.write_uniform_buffer_descriptors_batch(&self.device, &raw_writes);
+        Ok(())
     }
 
     pub fn write_buffer_descriptors_batch(

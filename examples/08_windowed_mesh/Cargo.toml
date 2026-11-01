@@ -1,0 +1,13 @@
+[package]
+publish = false
+name = "example-windowed-mesh"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Windowed textured mesh rendered through SurfaceFrames with MSAA and depth"
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
+winit = { version = "0.29", default-features = false, features = ["rwh_06", "x11", "wayland"] }
+bytemuck = { version = "1.19", features = ["derive"] }

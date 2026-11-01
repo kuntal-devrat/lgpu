@@ -1,7 +1,8 @@
 //! Integration tests verifying buffer offset read/write, Send/Sync thread safety, and resource recycling.
 
 use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureDimension,
+    TextureFormat, TextureUsage,
 };
 use std::sync::Arc;
 use std::thread;
@@ -161,6 +162,8 @@ fn test_command_pool_and_fence_recycling() {
         width: 32,
         height: 32,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -243,6 +246,8 @@ fn test_unowned_buffer_and_texture_drop_safety() {
         width: 16,
         height: 16,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: lgpu::TextureFormat::Rgba8Unorm,

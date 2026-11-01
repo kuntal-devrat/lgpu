@@ -1,23 +1,29 @@
 # lgpu
 
-A lightweight, bindless-first Vulkan 1.3 wrapper for Rust, built on [`ash`](https://github.com/ash-rs/ash).
+A small Vulkan 1.3 wrapper for Rust, built on [`ash`](https://github.com/ash-rs/ash).
 
-Designed for desktop experiments where you want dynamic rendering and global bindless descriptor indexing without the verbosity of raw Vulkan boilerplate or the overhead of large multi-backend frameworks.
+It targets desktop programs that want dynamic rendering and global bindless descriptor
+indexing without the boilerplate of raw Vulkan or the build cost of a multi-backend
+framework.
 
-## Key Features
+## Features
 
-- **Vulkan 1.3 Dynamic Rendering**: Uses dynamic rendering directly—no `VkRenderPass` or `VkFramebuffer` state boilerplate.
-- **Bindless Descriptor Heaps**: Unbounded descriptor indexing (`update_after_bind`) for storage buffers, sampled textures, storage images, and samplers.
-- **Fast Clean Builds**: Minimal dependency footprint (`ash`, `bitflags`, `thiserror`, `raw-window-handle`), compiling in 1–2 seconds.
-- **C99 FFI**: Universal C API included via `lgpu-c`.
+- Vulkan 1.3 dynamic rendering, without `VkRenderPass` or `VkFramebuffer` state.
+- Bindless descriptor heaps using `update_after_bind` for storage buffers, sampled
+  textures, storage images and samplers.
+- A block suballocator for buffers and textures.
+- Optional runtime WGSL compilation through Naga, behind the `wgsl` feature.
+- A C API in the companion crate `lgpu-c`.
 
-## Quick Example
+Clean builds take a second or two, since the dependency set is `ash`, `bitflags`,
+`thiserror` and `raw-window-handle`.
+
+## Example
 
 ```rust,no_run
 use lgpu::{BufferDesc, BufferUsage, MemoryLocation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // One-line GPU initialization
     let (device, _queue) = lgpu::default_device()?;
 
     let desc = BufferDesc {
@@ -34,4 +40,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For full documentation and examples, visit the [GitHub Repository](https://github.com/kuntal-devrat/lgpu).
+Full documentation and examples are in the
+[GitHub repository](https://github.com/kuntal-devrat/lgpu).

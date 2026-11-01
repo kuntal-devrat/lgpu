@@ -5,73 +5,83 @@
 [![CI Status](https://github.com/kuntal-devrat/lgpu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kuntal-devrat/lgpu/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
-A lightweight Vulkan 1.3 wrapper for Rust and C99, built on top of [`ash`](https://github.com/ash-rs/ash).
+A small Vulkan 1.3 wrapper for Rust and C99, built on [`ash`](https://github.com/ash-rs/ash).
 
-`lgpu` is designed for local desktop graphics experiments where you want modern Vulkan features—dynamic rendering and bindless descriptor indexing—without the verbosity of raw Vulkan boilerplate or the compile overhead of large multi-backend frameworks.
+lgpu is meant for desktop graphics work that needs dynamic rendering and bindless
+descriptor indexing without the boilerplate of raw Vulkan or the build cost of a
+multi-backend framework.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="lgpu Interactive 3D Window Demo" width="680" />
+  <img src="assets/demo.gif" alt="lgpu interactive 3D window demo" width="680" />
 </p>
 
----
+## What it provides
 
-## What is lgpu?
+- Vulkan 1.3 with dynamic rendering (`VK_KHR_dynamic_rendering`). No `VkRenderPass` or
+  `VkFramebuffer` objects to manage.
+- Global bindless descriptor heaps (`update_after_bind`) for storage buffers, sampled
+  textures, storage images and samplers. Shaders address resources by integer ID.
+- A block suballocator for buffers and textures so small resources do not each take a
+  driver allocation.
+- Optional WGSL to SPIR-V compilation at runtime through Naga, behind the `wgsl` feature.
+- A C99 header, [`lgpu.h`](crates/lgpu-c/include/lgpu.h), for use from C, C++ or Zig.
 
-- **Vulkan 1.3 only**: Uses dynamic rendering (`VK_KHR_dynamic_rendering`) directly. No `VkRenderPass` or `VkFramebuffer` state boilerplate.
-- **Bindless indexing**: Global descriptor heaps (`update_after_bind`) for uniform/storage buffers, sampled textures, storage images, and samplers. Resources are indexed by integer IDs in shaders.
-- **Fast compile times**: Depends only on `ash`, `bitflags`, `thiserror`, and `raw-window-handle`. Clean builds typically take 1–2 seconds.
-- **Simple suballocator**: Built-in block allocator for small buffers and textures to stay well clear of driver allocation limits.
-- **C99 FFI**: Includes [`lgpu.h`](crates/lgpu-c/include/lgpu.h) to use the library from C, C++, or Zig without Rust in your main application.
+The dependency set is `ash`, `bitflags`, `thiserror`, `raw-window-handle` (plus Naga when
+the `wgsl` feature is on), so clean builds finish in a second or two.
 
-### What lgpu is NOT
+## Scope
 
-- **Not a `wgpu` replacement**: `wgpu` is an implementation of WebGPU targeting multiple backends (Metal, D3D12, Vulkan, WebGL) with shader translation and validation via `naga`. `lgpu` targets Vulkan 1.3 exclusively and expects precompiled SPIR-V shaders.
-- **Not a fully safe sandbox**: While `lgpu` provides RAII and safe wrapper structs where reasonable, Vulkan synchronization and shader indexing still require you to know how modern GPUs work.
+lgpu is not a wgpu replacement. wgpu implements WebGPU across Metal, D3D12, Vulkan and
+the web, translates shaders with Naga, and validates GPU state at runtime. lgpu targets
+Vulkan 1.3 only and expects precompiled SPIR-V.
 
-For a detailed technical breakdown of how `lgpu` compares to `wgpu`, `vulkano`, and `kvark/blade`, along with thread safety (`Send`/`Sync`), CPU buffer mapping invariants, and synchronization rules, see **[Architecture, Safety & Synchronization Model](docs/ARCHITECTURE_AND_SAFETY.md)**.
+lgpu is also not a safety sandbox. Handles use RAII and host memory access is bounds
+checked, but GPU synchronization and shader resource indexing are left to the caller. A
+shader that indexes past a bindless heap will fault the device on most drivers.
 
----
+[Architecture, Safety and Synchronization Model](docs/ARCHITECTURE_AND_SAFETY.md) covers
+thread safety, mapped memory rules, lock ordering and the synchronization model.
 
 ## Workspace
 
-- **[`crates/lgpu`](crates/lgpu)**: High-level Rust API with RAII handles for devices, buffers, textures, pipelines, and command encoders.
-- **[`crates/lgpu-hal`](crates/lgpu-hal)**: Lower-level Vulkan 1.3 layer handling instance setup, memory suballocation, bindless descriptor sets, and swapchain presentation.
-- **[`crates/lgpu-c`](crates/lgpu-c)**: C99 bindings and shared library export.
-- **[`examples/`](examples)**: Runnable examples demonstrating compute, clear screen, bindless rendering, particle simulation, and windowed graphics.
+- [`crates/lgpu`](crates/lgpu): high-level Rust API with handles for devices, buffers,
+  textures, pipelines and command encoders.
+- [`crates/lgpu-hal`](crates/lgpu-hal): lower layer that owns Vulkan instance setup, the
+  memory suballocator, bindless heaps and swapchain presentation.
+- [`crates/lgpu-c`](crates/lgpu-c): C99 bindings and shared library export.
+- [`examples/`](examples): compute, clear screen, bindless rendering, particle and
+  windowed programs.
 
----
+## Platform support
 
-## Platform Support
-
-| Platform | Windowing / Surface | Vulkan Driver |
+| Platform | Windowing / surface | Vulkan driver |
 | :--- | :--- | :--- |
-| **Linux** | Wayland / X11 (`winit` / `raw-window-handle`) | Mesa (`RADV`, `ANV`, `NVK`), NVIDIA proprietary |
-| **Windows** | Win32 (`HWND` / `HINSTANCE`) | Standard vendor Vulkan runtime (`vulkan-1.dll`) |
-| **macOS** | Metal (`CAMetalLayer` via MoltenVK) | MoltenVK (`libMoltenVK.dylib`) |
+| Linux | Wayland or X11 (`winit` / `raw-window-handle`) | Mesa (RADV, ANV, NVK), NVIDIA proprietary |
+| Windows | Win32 (`HWND` / `HINSTANCE`) | Vendor Vulkan runtime (`vulkan-1.dll`) |
+| macOS | Metal (`CAMetalLayer` via MoltenVK) | MoltenVK (`libMoltenVK.dylib`) |
 
-*Requires a GPU / driver supporting Vulkan 1.3 and dynamic rendering.*
+A Vulkan 1.3 driver with dynamic rendering is required.
 
----
-
-## Quick Start
+## Quick start
 
 ### Rust
 
-Add `lgpu` to your `Cargo.toml`:
+Add lgpu to `Cargo.toml`:
 
 ```toml
 [dependencies]
-lgpu = "0.1.4"
+lgpu = "0.1.5"
 bytemuck = { version = "1.19", features = ["derive"] }
 ```
 
-#### Headless Compute Example
+#### Headless compute example
 
 ```rust,no_run
 use lgpu::{BufferDesc, BufferUsage, MemoryLocation};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize primary GPU in one line (or use Instance::new() for custom device selection)
+    // Initializes a default instance and picks the first GPU. Use Instance::new()
+    // when you need to choose a specific device.
     let (device, queue) = lgpu::default_device()?;
 
     // Create host-visible buffers
@@ -101,8 +111,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
----
 
 ### C99
 
@@ -135,24 +143,15 @@ int main(void) {
 }
 ```
 
-Build and run the polyglot examples:
+Build and run the C, C++ and Zig examples, which use the same header:
 
 ```bash
-# C99 Example
 make -C examples/c_example run
-
-# C++17 Example (RAII handles, GPU-to-GPU buffer copies)
 make -C examples/cpp_example run
-
-# Zig Example (C-import, buffer allocation & verification)
 make -C examples/zig_example run
 ```
 
----
-
 ## Examples
-
-Run any of the included examples:
 
 ```bash
 # Headless compute dispatch (vector addition)
@@ -161,40 +160,33 @@ cargo run -p example-headless-compute
 # Clear screen with dynamic rendering
 cargo run -p example-clear-screen
 
-# Bindless triangle (no vertex buffer, generated in shader)
+# Bindless triangle (no vertex buffer, generated in the shader)
 cargo run -p example-bindless-triangle
 
-# Particle simulation with compute & dynamic rendering
+# Particle simulation with compute and dynamic rendering
 cargo run -p example-bindless-100k
 
-# Interactive window with 3D torus raymarched shader
+# Interactive window with a raymarched torus shader
 cargo run --release -p example-window-shader
 
-# Real-time voxel raymarching engine (Minecraft-style translucent water, procedural mountains, caustics, floating islands)
+# Voxel raymarching engine with terrain, water and caustics
 cargo run --release -p example-voxel-renderer
-
-# C99, C++17, and Zig examples via single-header include/lgpu.h
-make -C examples/c_example run
-make -C examples/cpp_example run
-make -C examples/zig_example run
 ```
 
----
-
-## Running Tests
+## Running tests
 
 ```bash
-# Run unit & hardware integration tests
+# Unit and hardware integration tests
 cargo test --workspace
 
-# Run doc tests
+# Doc tests
 cargo test --doc
 
-# Run clippy
+# Lints
 cargo clippy --workspace --all-targets --all-features
 ```
 
----
+The integration tests skip themselves when no Vulkan 1.3 device is available.
 
 ## License
 
