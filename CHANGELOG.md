@@ -4,31 +4,25 @@ All notable changes to the `lgpu` workspace are recorded in this file. The forma
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.1.6] - 2026-11-01
 
 ### Added
+- Texture dimensions: 1D, 3D, cube, cube-array and 2D-array textures through
+  `TextureDimension` and `TextureDesc::array_layers`, with per-layer and per-slice uploads,
+  readbacks and mip generation.
+- `TextureDesc` convenience constructors: `new_1d`, `new_3d`, `new_2d_array`, `new_cube`,
+  `new_cube_array`, `with_mips` and `with_samples`.
+- Depth formats `Depth16Unorm`, `Depth24Stencil8` and `Depth32FloatStencil8`, including
+  stencil aspect barriers and depth/stencil attachment selection. Pipelines and render
+  passes now accept every depth format instead of only `D32_SFLOAT`.
+- `FrameRenderer`/`FrameConfig`: MSAA and depth attachments that follow the surface size,
+  and `FrameAttachments::begin` to start a pass with the correct load ops and resolve target.
+- `SurfaceFrames`/`SurfaceFrame`: acquire, reconfigure once on `OutOfDate`, prepare
+  attachments, submit and present in one flow.
 - Separate async compute queue support: adapters with a second compute-capable family get a
   dedicated queue (`Device::compute_queue`, `Device::create_compute_command_encoder`,
   `QueueFamily`), and buffers/textures are created with concurrent sharing so both queues can
   use them without ownership transfers.
-- `examples/08_windowed_mesh`: winit window rendering a textured mesh through `SurfaceFrames`
-  with 4x MSAA and depth.
-
-- 1D, 3D, cube, cube-array and 2D-array textures through `TextureDimension`, with per-layer
-  and per-slice uploads, readbacks and mip generation.
-- `Depth16Unorm`, `Depth24Stencil8` and `Depth32FloatStencil8` formats, including stencil
-  aspect barriers and depth/stencil attachment selection.
-- `FrameRenderer`/`FrameConfig`: depth and MSAA attachments that follow the surface size.
-- C API parity for texture dimensions, vertex buffers, MSAA resolve, uniform-buffer slots,
-  GPU timestamps, staged texture uploads, device-local buffers, debug labels and comparison
-  samplers (`lgpu_create_texture_ex`, `lgpu_encoder_draw_with_resolve`, ...).
-- `examples/07_textured_mesh`: indexed textured quad with uniform buffer, mips, depth test
-  and 4x MSAA resolve.
-
-
-## [Unreleased]
-
-### Added
 - Vertex buffer layouts and attributes in `GraphicsPipelineDesc`, plus
   `CommandEncoder::bind_vertex_buffer`, so meshes can be drawn from vertex and index buffers.
 - A bindless uniform buffer binding (binding 4), `Buffer::uniform_id()` and
@@ -36,7 +30,6 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the projec
 - MSAA resolve targets through `draw_with_ops_resolve`, `draw_with_depth_and_ops_resolve`,
   `draw_indexed_with_ops_resolve`, `draw_indirect_with_ops_resolve` and
   `begin_render_pass_with_resolve`.
-- WGSL compilation is part of the default feature set.
 - Pipeline cache persistence with `Device::pipeline_cache_data()` and
   `Adapter::request_device_with_cache()`.
 - Sampler depth comparison (`SamplerDesc::compare_enable` and `compare_op`) for shadow maps.
@@ -44,8 +37,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the projec
   `end_debug_label`.
 - `LGPU_PANIC_ON_VALIDATION=1` to turn validation errors into panics; they are logged
   otherwise.
+- C API parity for texture dimensions, vertex buffers, MSAA resolve, uniform-buffer slots,
+  GPU timestamps, staged texture uploads, device-local buffers, debug labels, comparison
+  samplers and async compute queues (`lgpu_create_texture_ex`,
+  `lgpu_encoder_draw_with_resolve`, `lgpu_device_has_async_compute_queue`, ...).
+- Examples: `07_textured_mesh` (indexed textured quad with uniform buffer, mips, depth test
+  and 4x MSAA resolve) and `08_windowed_mesh` (winit window rendering through `SurfaceFrames`).
 
 ### Fixed
+- The queue mutex is now held across `vkQueueSubmit` and timeline value allocation, so
+  concurrent submissions no longer race and timeline signals stay ordered.
 - Cloned buffers and textures now share their host-access mutex and image layout state,
   so reads and writes through different handles are serialized and barriers always see
   the layout the image is actually in.
@@ -59,7 +60,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the projec
   creation fails.
 - Freeing a dedicated allocation no longer frees memory that is still mapped.
 - `create_texture` rejects `sample_count` values that are not 1, 2, 4, 8, 16, 32 or 64,
-  and rejects more mip levels than the texture extent allows.
+  rejects more mip levels than the texture extent allows, and rejects cube textures that are
+  not square or whose layer count is not a multiple of six.
 - `write_texture` rejects uploads smaller than one packed mip level, multisampled
   targets and depth formats.
 - Bindless slot recycling ignores duplicate and out of range frees.
@@ -67,10 +69,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the projec
   index 0.
 
 ### Changed
+- Command recorders, command pools and the recorder cache are split per queue family, and
+  recycled recorders return to the cache they belong to.
+- Surfaces can only be submitted on the graphics queue; submitting a surface frame on the
+  compute queue is rejected with a descriptive error.
 - `Surface::configure` destroys a newly created swapchain and any sync objects it
   created when a later step fails, instead of leaking them.
 - The buddy allocator keeps free chunks in hash sets, so buddy lookup during coalescing is
   O(1) rather than a linear scan.
+
+### Breaking
+- `TextureDesc` gained required `dimension` and `array_layers` fields; use the
+  `TextureDesc::new_*` constructors or set them explicitly.
 
 ## [0.1.5] - 2026-10-28
 
