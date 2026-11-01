@@ -130,6 +130,8 @@ fn test_concurrent_texture_layout_protection() {
                 width: 64,
                 height: 64,
                 depth: 1,
+                dimension: TextureDimension::D2,
+                array_layers: 1,
                 mip_levels: 1,
                 sample_count: 1,
                 format: TextureFormat::Rgba8Unorm,

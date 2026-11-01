@@ -5,7 +5,8 @@
 //! in shader), and renders an ASCII visualization in the terminal.
 
 use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureDimension,
+    TextureFormat, TextureUsage,
 };
 
 // Precompiled portable SPIR-V bytecode containing both vs_main and fs_main
@@ -54,6 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,

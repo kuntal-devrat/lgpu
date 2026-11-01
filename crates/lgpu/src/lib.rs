@@ -16,6 +16,8 @@ pub mod command;
 #[cfg(feature = "vulkan")]
 pub mod device;
 #[cfg(feature = "vulkan")]
+pub mod frame;
+#[cfg(feature = "vulkan")]
 pub mod instance;
 #[cfg(feature = "vulkan")]
 pub mod pipeline;
@@ -33,6 +35,8 @@ pub use command::*;
 #[cfg(feature = "vulkan")]
 pub use device::*;
 #[cfg(feature = "vulkan")]
+pub use frame::*;
+#[cfg(feature = "vulkan")]
 pub use instance::*;
 #[cfg(feature = "vulkan")]
 pub use pipeline::*;
@@ -45,9 +49,10 @@ pub use texture::*;
 
 pub use lgpu_hal::{
     AdapterInfo, AddressMode, Backend, BlendComponent, BlendFactor, BlendOp, BlendState,
-    BufferDesc, BufferUsage, ColorLoadOp, CullMode, DepthLoadOp, DeviceLimits, DeviceType,
-    FilterMode, FrontFace, GraphicsPipelineDesc, HalError, LoadOp, MemoryLocation, PrimitiveState,
-    PrimitiveTopology, SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, ColorLoadOp, CompareOp, CullMode, DepthLoadOp, DeviceLimits,
+    DeviceType, FilterMode, FrontFace, GraphicsPipelineDesc, HalError, LoadOp, MemoryLocation,
+    PrimitiveState, PrimitiveTopology, SamplerDesc, TextureDesc, TextureDimension, TextureFormat,
+    TextureUsage, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode,
 };
 
 #[derive(thiserror::Error, Debug)]

@@ -9,11 +9,19 @@ pub struct VulkanDevice {
     pub physical_device: vk::PhysicalDevice,
     pub queue: std::sync::Mutex<vk::Queue>,
     pub queue_family_index: u32,
+    /// Dedicated compute queue, when the adapter exposes a second compute-capable family.
+    pub compute_queue: Option<std::sync::Mutex<vk::Queue>>,
+    pub compute_queue_family_index: Option<u32>,
+    /// Every queue family resources must be shareable with; one entry means exclusive access.
+    pub queue_family_indices: Vec<u32>,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub non_coherent_atom_size: u64,
+    pub timestamp_valid_bits: u32,
     pub bindless_heap: Option<bindless::VulkanBindlessHeap>,
     pub swapchain_loader: Option<ash::khr::swapchain::Device>,
+    pub debug_utils_device: Option<ash::ext::debug_utils::Device>,
     pub command_recorder_cache: std::sync::Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>>,
+    pub compute_recorder_cache: std::sync::Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>>,
     pub fence_cache: std::sync::Mutex<Vec<vk::Fence>>,
     pub internal_frame_semaphore: vk::Semaphore,
     pub internal_frame_counter: std::sync::atomic::AtomicU64,
@@ -24,6 +32,16 @@ pub struct VulkanDevice {
 }
 
 impl VulkanDevice {
+    /// Sharing mode and family list for resources that may be used from every queue this device
+    /// owns. With a single family, exclusive ownership is both cheaper and sufficient.
+    pub fn sharing(&self) -> (vk::SharingMode, &[u32]) {
+        if self.queue_family_indices.len() > 1 {
+            (vk::SharingMode::CONCURRENT, &self.queue_family_indices)
+        } else {
+            (vk::SharingMode::EXCLUSIVE, &[])
+        }
+    }
+
     pub(crate) fn find_memory_type(
         &self,
         type_filter: u32,
@@ -56,6 +74,16 @@ impl VulkanDevice {
         Err(HalError::OutOfMemory(
             "Suitable memory type not found".to_string(),
         ))
+    }
+
+    /// Returns the serialized pipeline cache contents, suitable for persisting and passing to
+    /// `VulkanInstance::create_device_with_cache` on the next run.
+    pub fn get_pipeline_cache_data(&self) -> Result<Vec<u8>, HalError> {
+        unsafe {
+            self.device
+                .get_pipeline_cache_data(self.pipeline_cache)
+                .map_err(|e| HalError::BackendError(format!("vkGetPipelineCacheData failed: {e}")))
+        }
     }
 
     pub fn wait_idle(&self) -> Result<(), HalError> {
@@ -92,6 +120,87 @@ impl VulkanDevice {
             }
         }
         Ok(())
+    }
+
+    pub fn create_timestamp_query_pool(&self, count: u32) -> Result<vk::QueryPool, HalError> {
+        if self.timestamp_valid_bits == 0 {
+            return Err(HalError::InvalidParameter(
+                "The selected queue family does not support timestamps".to_string(),
+            ));
+        }
+        if count == 0 {
+            return Err(HalError::InvalidParameter(
+                "A timestamp query pool needs at least one query".to_string(),
+            ));
+        }
+        let info = vk::QueryPoolCreateInfo::default()
+            .query_type(vk::QueryType::TIMESTAMP)
+            .query_count(count);
+        unsafe {
+            self.device
+                .create_query_pool(&info, None)
+                .map_err(|e| HalError::BackendError(format!("vkCreateQueryPool failed: {e}")))
+        }
+    }
+
+    pub fn destroy_query_pool(&self, pool: vk::QueryPool) {
+        unsafe {
+            self.device.destroy_query_pool(pool, None);
+        }
+    }
+
+    pub fn cmd_write_timestamp(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        pool: vk::QueryPool,
+        index: u32,
+    ) {
+        unsafe {
+            self.device.cmd_write_timestamp2(
+                recorder.command_buffer,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                pool,
+                index,
+            );
+        }
+    }
+
+    pub fn cmd_reset_query_pool(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        pool: vk::QueryPool,
+        first: u32,
+        count: u32,
+    ) {
+        unsafe {
+            self.device
+                .cmd_reset_query_pool(recorder.command_buffer, pool, first, count);
+        }
+    }
+
+    /// Blocks until the queries are available and returns their raw values.
+    pub fn read_timestamp_query_pool(
+        &self,
+        pool: vk::QueryPool,
+        count: u32,
+    ) -> Result<Vec<u64>, HalError> {
+        let mut values = vec![0u64; count as usize];
+        // Deliberately no WAIT flag: waiting on a query that was reset but never written would
+        // block until the driver declares the device lost. Waiting for submission completion is
+        // the caller's job.
+        match unsafe {
+            self.device
+                .get_query_pool_results(pool, 0, &mut values, vk::QueryResultFlags::TYPE_64)
+        } {
+            Ok(()) => Ok(values),
+            Err(vk::Result::NOT_READY) => Err(HalError::NotReady(
+                "GPU timestamps are not available yet; wait for the submission to finish"
+                    .to_string(),
+            )),
+            Err(e) => Err(HalError::BackendError(format!(
+                "vkGetQueryPoolResults failed: {e}"
+            ))),
+        }
     }
 
     /// Reclaims completely empty memory blocks in the suballocator and idle command pools back to Vulkan.

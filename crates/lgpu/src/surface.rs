@@ -45,6 +45,25 @@ pub struct SurfaceTexture {
     pub(crate) presented: std::sync::atomic::AtomicBool,
 }
 
+fn destroy_surface_sync_objects(
+    device: &lgpu_hal::vulkan::VulkanDevice,
+    acquire_semaphores: &[lgpu_hal::vulkan::vk::Semaphore],
+    render_semaphores: &[lgpu_hal::vulkan::vk::Semaphore],
+    in_flight_fences: &[lgpu_hal::vulkan::vk::Fence],
+) {
+    unsafe {
+        for &semaphore in acquire_semaphores {
+            device.device.destroy_semaphore(semaphore, None);
+        }
+        for &semaphore in render_semaphores {
+            device.device.destroy_semaphore(semaphore, None);
+        }
+        for &fence in in_flight_fences {
+            device.device.destroy_fence(fence, None);
+        }
+    }
+}
+
 impl Surface {
     pub fn configure(
         &mut self,
@@ -55,7 +74,8 @@ impl Surface {
         self.device = Some(Arc::clone(vulkan_device));
         self.config = Some(config.clone());
 
-        // Handle zero-size windows (minimized) gracefully by pausing rendering
+        // A minimized window reports a zero extent. Skip swapchain creation until it is
+        // restored; get_current_texture returns NotReady in the meantime.
         if config.width == 0 || config.height == 0 {
             return Ok(());
         }
@@ -114,7 +134,7 @@ impl Surface {
 
         let swapchain = swapchain_res?;
 
-        // Drain previous sync objects on reconfiguration to ensure all fences are reset to SIGNALED
+        // Release the previous swapchain's sync objects; they are rebuilt below.
         for acq in self.acquire_semaphores.drain(..) {
             unsafe {
                 vulkan_device.device.destroy_semaphore(acq, None);
@@ -131,40 +151,50 @@ impl Surface {
             }
         }
 
-        // Create per-frame-in-flight sync objects (triple buffering)
+        // Three frames in flight, plus one render semaphore per swapchain image.
         const MAX_FRAMES_IN_FLIGHT: usize = 3;
         let sem_info = lgpu_hal::vulkan::vk::SemaphoreCreateInfo::default();
         let fence_info = lgpu_hal::vulkan::vk::FenceCreateInfo::default()
             .flags(lgpu_hal::vulkan::vk::FenceCreateFlags::SIGNALED);
 
-        for _ in 0..MAX_FRAMES_IN_FLIGHT {
-            let acq = unsafe {
-                vulkan_device
-                    .device
-                    .create_semaphore(&sem_info, None)
-                    .map_err(|e| HalError::BackendError(e.to_string()))?
-            };
-            let fence = unsafe {
-                vulkan_device
-                    .device
-                    .create_fence(&fence_info, None)
-                    .map_err(|e| HalError::BackendError(e.to_string()))?
-            };
-            self.acquire_semaphores.push(acq);
-            self.in_flight_fences.push(fence);
+        let mut acquire_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+        let mut in_flight_fences = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+        let mut render_semaphores = Vec::with_capacity(swapchain.images.len());
+
+        // Build the new sync objects into locals first so a failure part way through can
+        // release everything created so far, including the new swapchain.
+        let creation = (|| -> Result<(), HalError> {
+            for _ in 0..MAX_FRAMES_IN_FLIGHT {
+                let acq = unsafe { vulkan_device.device.create_semaphore(&sem_info, None) }
+                    .map_err(|e| HalError::BackendError(e.to_string()))?;
+                acquire_semaphores.push(acq);
+
+                let fence = unsafe { vulkan_device.device.create_fence(&fence_info, None) }
+                    .map_err(|e| HalError::BackendError(e.to_string()))?;
+                in_flight_fences.push(fence);
+            }
+            for _ in 0..swapchain.images.len() {
+                let rend = unsafe { vulkan_device.device.create_semaphore(&sem_info, None) }
+                    .map_err(|e| HalError::BackendError(e.to_string()))?;
+                render_semaphores.push(rend);
+            }
+            Ok(())
+        })();
+
+        if let Err(e) = creation {
+            destroy_surface_sync_objects(
+                vulkan_device,
+                &acquire_semaphores,
+                &render_semaphores,
+                &in_flight_fences,
+            );
+            vulkan_device.destroy_swapchain(swapchain);
+            return Err(e.into());
         }
 
-        // Create one render semaphore per swapchain image to ensure safe semaphore reuse
-        for _ in 0..swapchain.images.len() {
-            let rend = unsafe {
-                vulkan_device
-                    .device
-                    .create_semaphore(&sem_info, None)
-                    .map_err(|e| HalError::BackendError(e.to_string()))?
-            };
-            self.render_semaphores.push(rend);
-        }
-
+        self.acquire_semaphores = acquire_semaphores;
+        self.render_semaphores = render_semaphores;
+        self.in_flight_fences = in_flight_fences;
         self.swapchain = Some(swapchain);
         self.device = Some(Arc::clone(vulkan_device));
         self.config = Some(config.clone());
@@ -245,11 +275,19 @@ impl Surface {
                 block_id: None,
                 offset: 0,
                 allocated_size: 0,
-                layout: std::sync::Mutex::new(lgpu_hal::vulkan::vk::ImageLayout::UNDEFINED),
+                layout: Arc::new(std::sync::Mutex::new(
+                    lgpu_hal::vulkan::vk::ImageLayout::UNDEFINED,
+                )),
                 width: swapchain.width,
                 height: swapchain.height,
+                depth: 1,
+                array_layers: 1,
+                dimension: lgpu_hal::TextureDimension::D2,
                 mip_levels: 1,
                 sample_count: 1,
+                supports_sampled: false,
+                usage_flags: lgpu_hal::vulkan::vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | lgpu_hal::vulkan::vk::ImageUsageFlags::TRANSFER_DST,
                 format: config.format.to_vk(),
                 owned: false,
             }),

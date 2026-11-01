@@ -1,12 +1,13 @@
-//! Vulkan memory suballocator based on a segregated power-of-two Buddy Allocator.
+//! Vulkan memory suballocator built on a segregated power-of-two buddy allocator.
 //!
-//! Suballocates buffer and texture memory allocations from large contiguous blocks
-//! (64 MiB by default) to stay well within driver allocation limits (e.g., maxMemoryAllocationCount = 4096).
-//! Provides O(1) allocation and O(1) coalescing deallocation without vector sorting overhead.
+//! Buffers and textures are suballocated from large blocks (64 MiB by default) so a
+//! process stays clear of driver allocation limits such as maxMemoryAllocationCount = 4096.
+//! Each order keeps its free chunks in a hash set, so allocation and buddy coalescing are
+//! O(1) and no sorting is involved.
 
 use crate::HalError;
 use ash::vk;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_BLOCK_SIZE: u64 = 64 * 1024 * 1024; // 64 MiB chunks
 pub const SUBALLOCATION_THRESHOLD: u64 = 32 * 1024 * 1024; // 32 MiB
@@ -40,7 +41,8 @@ pub struct MemoryBlock {
     pub mapped_base: Option<*mut u8>,
     pub is_coherent: bool,
     /// Free chunks segregated by power-of-two order (size = MIN_CHUNK_SIZE << order).
-    pub free_lists: Vec<Vec<u64>>,
+    /// Sets are used so buddy lookups during coalescing stay O(1).
+    pub free_lists: Vec<HashSet<u64>>,
     /// Tracks active allocations: offset -> (order, allocated_size) to detect double free.
     pub allocated_chunks: HashMap<u64, (usize, u64)>,
 }
@@ -73,8 +75,8 @@ impl MemoryBlock {
         is_coherent: bool,
     ) -> Self {
         let max_order = size_to_order(size).min(NUM_ORDERS - 1);
-        let mut free_lists = vec![Vec::new(); NUM_ORDERS];
-        free_lists[max_order].push(0);
+        let mut free_lists = vec![HashSet::new(); NUM_ORDERS];
+        free_lists[max_order].insert(0);
 
         Self {
             id,
@@ -107,14 +109,15 @@ impl MemoryBlock {
         }
 
         let order = found_order?;
-        let offset = self.free_lists[order].pop()?;
+        let offset = *self.free_lists[order].iter().next()?;
+        self.free_lists[order].remove(&offset);
 
         // Split chunk down to target_order
         let mut current_order = order;
         while current_order > target_order {
             current_order -= 1;
             let buddy_offset = offset + order_size(current_order);
-            self.free_lists[current_order].push(buddy_offset);
+            self.free_lists[current_order].insert(buddy_offset);
         }
 
         self.allocated_chunks.insert(offset, (target_order, size));
@@ -123,12 +126,14 @@ impl MemoryBlock {
     }
 
     pub fn free(&mut self, offset: u64, size: u64) {
-        // Look up the order either from tracked allocations or calculate from size
-        let order = if let Some((alloc_order, _)) = self.allocated_chunks.remove(&offset) {
-            alloc_order
-        } else {
-            // Already freed or untracked: compute order from size and verify
-            size_to_order(size).min(NUM_ORDERS - 1)
+        // Only tracked chunks may be released. Pushing an untracked (already freed) offset back
+        // into a free list would hand the same memory to two live allocations.
+        let order = match self.allocated_chunks.remove(&offset) {
+            Some((alloc_order, _)) => alloc_order,
+            None => {
+                tracing::warn!("Ignoring free of untracked chunk at offset {offset} (size {size})");
+                return;
+            }
         };
 
         let mut curr_order = order;
@@ -139,13 +144,7 @@ impl MemoryBlock {
             let chunk_sz = order_size(curr_order);
             let buddy_offset = curr_offset ^ chunk_sz;
 
-            // Check if buddy is free in free_lists[curr_order]
-            if let Some(pos) = self.free_lists[curr_order]
-                .iter()
-                .position(|&off| off == buddy_offset)
-            {
-                // Remove buddy from free list and coalesce
-                self.free_lists[curr_order].swap_remove(pos);
+            if self.free_lists[curr_order].remove(&buddy_offset) {
                 curr_offset = curr_offset.min(buddy_offset);
                 curr_order += 1;
             } else {
@@ -153,7 +152,7 @@ impl MemoryBlock {
             }
         }
 
-        self.free_lists[curr_order].push(curr_offset);
+        self.free_lists[curr_order].insert(curr_offset);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -209,12 +208,14 @@ impl VulkanSuballocator {
             };
 
             let mapped_ptr = if is_host_visible {
-                let ptr = unsafe {
-                    device
-                        .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-                        .map_err(|e| HalError::MapError(e.to_string()))?
-                };
-                Some(ptr as *mut u8)
+                match unsafe { device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty()) } {
+                    Ok(ptr) => Some(ptr as *mut u8),
+                    Err(e) => {
+                        // Never leak the dedicated allocation when mapping fails.
+                        unsafe { device.free_memory(memory, None) };
+                        return Err(HalError::MapError(e.to_string()));
+                    }
+                }
             } else {
                 None
             };
@@ -262,12 +263,14 @@ impl VulkanSuballocator {
         };
 
         let mapped_base = if is_host_visible {
-            let ptr = unsafe {
-                device
-                    .map_memory(memory, 0, block_size, vk::MemoryMapFlags::empty())
-                    .map_err(|e| HalError::MapError(e.to_string()))?
-            };
-            Some(ptr as *mut u8)
+            match unsafe { device.map_memory(memory, 0, block_size, vk::MemoryMapFlags::empty()) } {
+                Ok(ptr) => Some(ptr as *mut u8),
+                Err(e) => {
+                    // Never leak the freshly allocated block when mapping fails.
+                    unsafe { device.free_memory(memory, None) };
+                    return Err(HalError::MapError(e.to_string()));
+                }
+            }
         } else {
             None
         };

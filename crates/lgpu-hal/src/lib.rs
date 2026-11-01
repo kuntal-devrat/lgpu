@@ -109,7 +109,47 @@ pub enum TextureFormat {
     R32Float,
     Rgba16Float,
     Rgba32Float,
+    Depth16Unorm,
     Depth32Float,
+    Depth24Stencil8,
+    Depth32FloatStencil8,
+}
+
+impl TextureFormat {
+    /// Size in bytes of a single texel of this format.
+    pub fn bytes_per_pixel(&self) -> u32 {
+        match self {
+            TextureFormat::Rgba8Unorm
+            | TextureFormat::Rgba8Srgb
+            | TextureFormat::Bgra8Unorm
+            | TextureFormat::Bgra8Srgb
+            | TextureFormat::R32Float
+            | TextureFormat::Depth16Unorm
+            | TextureFormat::Depth24Stencil8
+            | TextureFormat::Depth32Float => 4,
+            TextureFormat::Rgba16Float | TextureFormat::Depth32FloatStencil8 => 8,
+            TextureFormat::Rgba32Float => 16,
+        }
+    }
+
+    /// Whether the format is usable as a depth (or depth/stencil) attachment.
+    pub fn is_depth(&self) -> bool {
+        matches!(
+            self,
+            TextureFormat::Depth16Unorm
+                | TextureFormat::Depth32Float
+                | TextureFormat::Depth24Stencil8
+                | TextureFormat::Depth32FloatStencil8
+        )
+    }
+
+    /// Whether the format carries a stencil component.
+    pub fn has_stencil(&self) -> bool {
+        matches!(
+            self,
+            TextureFormat::Depth24Stencil8 | TextureFormat::Depth32FloatStencil8
+        )
+    }
 }
 
 #[cfg(feature = "vulkan")]
@@ -123,7 +163,10 @@ impl TextureFormat {
             TextureFormat::R32Float => ash::vk::Format::R32_SFLOAT,
             TextureFormat::Rgba16Float => ash::vk::Format::R16G16B16A16_SFLOAT,
             TextureFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
+            TextureFormat::Depth16Unorm => ash::vk::Format::D16_UNORM,
             TextureFormat::Depth32Float => ash::vk::Format::D32_SFLOAT,
+            TextureFormat::Depth24Stencil8 => ash::vk::Format::D24_UNORM_S8_UINT,
+            TextureFormat::Depth32FloatStencil8 => ash::vk::Format::D32_SFLOAT_S8_UINT,
         }
     }
 
@@ -136,7 +179,10 @@ impl TextureFormat {
             ash::vk::Format::R32_SFLOAT => Some(TextureFormat::R32Float),
             ash::vk::Format::R16G16B16A16_SFLOAT => Some(TextureFormat::Rgba16Float),
             ash::vk::Format::R32G32B32A32_SFLOAT => Some(TextureFormat::Rgba32Float),
+            ash::vk::Format::D16_UNORM => Some(TextureFormat::Depth16Unorm),
             ash::vk::Format::D32_SFLOAT => Some(TextureFormat::Depth32Float),
+            ash::vk::Format::D24_UNORM_S8_UINT => Some(TextureFormat::Depth24Stencil8),
+            ash::vk::Format::D32_SFLOAT_S8_UINT => Some(TextureFormat::Depth32FloatStencil8),
             _ => None,
         }
     }
@@ -153,12 +199,32 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureDimension {
+    /// 1D texture. `height` and `depth` must both be 1.
+    D1,
+    /// Single-layer 2D texture.
+    D2,
+    /// 2D texture with `array_layers` layers.
+    D2Array,
+    /// Volume texture with `depth` slices.
+    D3,
+    /// Cube map; `array_layers` must be the number of cube faces (6 or a multiple of it).
+    Cube,
+    /// Cube map array; `array_layers` counts all faces across cubes.
+    CubeArray,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextureDesc<'a> {
     pub label: Option<&'a str>,
     pub width: u32,
     pub height: u32,
+    /// Number of slices for [`TextureDimension::D3`]; 1 for every other dimension.
     pub depth: u32,
+    /// Image layers. For cube maps this is the number of faces (`6` per cube).
+    pub array_layers: u32,
+    pub dimension: TextureDimension,
     pub mip_levels: u32,
     pub sample_count: u32,
     pub format: TextureFormat,
@@ -172,11 +238,84 @@ impl<'a> TextureDesc<'a> {
             width,
             height,
             depth: 1,
+            array_layers: 1,
+            dimension: TextureDimension::D2,
             mip_levels: 1,
             sample_count: 1,
             format,
             usage,
         }
+    }
+
+    pub fn new_1d(width: u32, format: TextureFormat, usage: TextureUsage) -> Self {
+        Self {
+            width,
+            height: 1,
+            dimension: TextureDimension::D1,
+            ..Self::new_2d(width, 1, format, usage)
+        }
+    }
+
+    pub fn new_3d(
+        width: u32,
+        height: u32,
+        depth: u32,
+        format: TextureFormat,
+        usage: TextureUsage,
+    ) -> Self {
+        Self {
+            depth,
+            dimension: TextureDimension::D3,
+            ..Self::new_2d(width, height, format, usage)
+        }
+    }
+
+    pub fn new_2d_array(
+        width: u32,
+        height: u32,
+        layers: u32,
+        format: TextureFormat,
+        usage: TextureUsage,
+    ) -> Self {
+        Self {
+            array_layers: layers,
+            dimension: TextureDimension::D2Array,
+            ..Self::new_2d(width, height, format, usage)
+        }
+    }
+
+    /// A cube map with `6` faces (`array_layers == 6`).
+    pub fn new_cube(size: u32, format: TextureFormat, usage: TextureUsage) -> Self {
+        Self {
+            width: size,
+            height: size,
+            array_layers: 6,
+            dimension: TextureDimension::Cube,
+            ..Self::new_2d(size, size, format, usage)
+        }
+    }
+
+    /// A cube map array holding `cube_count` cubes (`array_layers == cube_count * 6`).
+    pub fn new_cube_array(
+        size: u32,
+        cube_count: u32,
+        format: TextureFormat,
+        usage: TextureUsage,
+    ) -> Self {
+        Self {
+            array_layers: cube_count * 6,
+            ..Self::new_cube(size, format, usage)
+        }
+    }
+
+    pub fn with_mips(mut self, mip_levels: u32) -> Self {
+        self.mip_levels = mip_levels;
+        self
+    }
+
+    pub fn with_samples(mut self, sample_count: u32) -> Self {
+        self.sample_count = sample_count;
+        self
     }
 }
 
@@ -193,6 +332,35 @@ pub enum AddressMode {
     MirrorRepeat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Never,
+    Less,
+    Equal,
+    LessOrEqual,
+    Greater,
+    NotEqual,
+    GreaterOrEqual,
+    Always,
+}
+
+impl CompareOp {
+    /// Maps to the matching Vulkan compare operation.
+    #[cfg(feature = "vulkan")]
+    pub fn to_vk(&self) -> ash::vk::CompareOp {
+        match self {
+            CompareOp::Never => ash::vk::CompareOp::NEVER,
+            CompareOp::Less => ash::vk::CompareOp::LESS,
+            CompareOp::Equal => ash::vk::CompareOp::EQUAL,
+            CompareOp::LessOrEqual => ash::vk::CompareOp::LESS_OR_EQUAL,
+            CompareOp::Greater => ash::vk::CompareOp::GREATER,
+            CompareOp::NotEqual => ash::vk::CompareOp::NOT_EQUAL,
+            CompareOp::GreaterOrEqual => ash::vk::CompareOp::GREATER_OR_EQUAL,
+            CompareOp::Always => ash::vk::CompareOp::ALWAYS,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SamplerDesc<'a> {
     pub label: Option<&'a str>,
@@ -202,6 +370,9 @@ pub struct SamplerDesc<'a> {
     pub address_mode_u: AddressMode,
     pub address_mode_v: AddressMode,
     pub address_mode_w: AddressMode,
+    /// Enables depth comparison, which shadow-map sampling requires.
+    pub compare_enable: bool,
+    pub compare_op: CompareOp,
 }
 
 impl Default for SamplerDesc<'_> {
@@ -214,6 +385,8 @@ impl Default for SamplerDesc<'_> {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
+            compare_enable: false,
+            compare_op: CompareOp::Always,
         }
     }
 }
@@ -420,6 +593,111 @@ impl BlendState {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexFormat {
+    Float32,
+    Float32x2,
+    Float32x3,
+    Float32x4,
+    Uint32,
+    Uint32x2,
+    Uint32x3,
+    Uint32x4,
+    Sint32,
+    Sint32x2,
+    Sint32x3,
+    Sint32x4,
+    Uint8x4,
+}
+
+impl VertexFormat {
+    /// Size of one attribute in bytes.
+    pub fn size(&self) -> u32 {
+        match self {
+            VertexFormat::Float32 | VertexFormat::Uint32 | VertexFormat::Sint32 => 4,
+            VertexFormat::Float32x2 | VertexFormat::Uint32x2 | VertexFormat::Sint32x2 => 8,
+            VertexFormat::Float32x3 | VertexFormat::Uint32x3 | VertexFormat::Sint32x3 => 12,
+            VertexFormat::Float32x4 | VertexFormat::Uint32x4 | VertexFormat::Sint32x4 => 16,
+            VertexFormat::Uint8x4 => 4,
+        }
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl VertexFormat {
+    pub fn to_vk(&self) -> ash::vk::Format {
+        use ash::vk::Format as F;
+        match self {
+            VertexFormat::Float32 => F::R32_SFLOAT,
+            VertexFormat::Float32x2 => F::R32G32_SFLOAT,
+            VertexFormat::Float32x3 => F::R32G32B32_SFLOAT,
+            VertexFormat::Float32x4 => F::R32G32B32A32_SFLOAT,
+            VertexFormat::Uint32 => F::R32_UINT,
+            VertexFormat::Uint32x2 => F::R32G32_UINT,
+            VertexFormat::Uint32x3 => F::R32G32B32_UINT,
+            VertexFormat::Uint32x4 => F::R32G32B32A32_UINT,
+            VertexFormat::Sint32 => F::R32_SINT,
+            VertexFormat::Sint32x2 => F::R32G32_SINT,
+            VertexFormat::Sint32x3 => F::R32G32B32_SINT,
+            VertexFormat::Sint32x4 => F::R32G32B32A32_SINT,
+            VertexFormat::Uint8x4 => F::R8G8B8A8_UINT,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexStepMode {
+    Vertex,
+    Instance,
+}
+
+#[cfg(feature = "vulkan")]
+impl VertexStepMode {
+    pub fn to_vk(&self) -> ash::vk::VertexInputRate {
+        match self {
+            VertexStepMode::Vertex => ash::vk::VertexInputRate::VERTEX,
+            VertexStepMode::Instance => ash::vk::VertexInputRate::INSTANCE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VertexAttribute {
+    /// Shader input location, matching `layout(location = N)` or `@location(N)`.
+    pub location: u32,
+    pub format: VertexFormat,
+    /// Byte offset of the attribute inside the vertex struct.
+    pub offset: u32,
+}
+
+impl VertexAttribute {
+    pub fn new(location: u32, format: VertexFormat, offset: u32) -> Self {
+        Self {
+            location,
+            format,
+            offset,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct VertexBufferLayout {
+    /// Distance in bytes between consecutive vertices (or instances).
+    pub stride: u32,
+    pub step_mode: VertexStepMode,
+    pub attributes: Vec<VertexAttribute>,
+}
+
+impl VertexBufferLayout {
+    pub fn new(stride: u32, step_mode: VertexStepMode, attributes: Vec<VertexAttribute>) -> Self {
+        Self {
+            stride,
+            step_mode,
+            attributes,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GraphicsPipelineDesc<'a> {
     pub label: Option<&'a str>,
@@ -433,6 +711,8 @@ pub struct GraphicsPipelineDesc<'a> {
     pub sample_count: u32,
     pub primitive: PrimitiveState,
     pub blend: Option<BlendState>,
+    /// Vertex buffer layouts, one per vertex binding, in binding index order.
+    pub vertex_buffers: Vec<VertexBufferLayout>,
 }
 
 impl<'a> GraphicsPipelineDesc<'a> {
@@ -449,6 +729,7 @@ impl<'a> GraphicsPipelineDesc<'a> {
             sample_count: 1,
             primitive: PrimitiveState::default(),
             blend: None,
+            vertex_buffers: Vec::new(),
         }
     }
 
@@ -469,6 +750,7 @@ impl<'a> GraphicsPipelineDesc<'a> {
             sample_count: 1,
             primitive: PrimitiveState::default(),
             blend: None,
+            vertex_buffers: Vec::new(),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use super::VulkanDevice;
 use crate::{
-    AddressMode, FilterMode, HalError, SamplerDesc, TextureDesc, TextureFormat, TextureUsage,
+    AddressMode, FilterMode, HalError, SamplerDesc, TextureDesc, TextureDimension, TextureUsage,
 };
 use ash::vk;
 
@@ -15,10 +15,21 @@ pub struct VulkanTexture {
     pub allocated_size: u64,
     pub width: u32,
     pub height: u32,
+    /// Slices of a 3D image; 1 for every other dimension.
+    pub depth: u32,
+    /// Image layers (`6` per cube, 1 for plain 2D/3D).
+    pub array_layers: u32,
+    pub dimension: crate::TextureDimension,
     pub mip_levels: u32,
     pub sample_count: u32,
+    /// Whether the image was created with sampled usage. Only then is a transition to
+    /// `SHADER_READ_ONLY_OPTIMAL` legal.
+    pub supports_sampled: bool,
+    pub usage_flags: vk::ImageUsageFlags,
     pub format: vk::Format,
-    pub layout: std::sync::Mutex<vk::ImageLayout>,
+    /// Shared with every clone of this image so layout tracking cannot diverge between handles
+    /// that reference the same `VkImage`.
+    pub layout: std::sync::Arc<std::sync::Mutex<vk::ImageLayout>>,
     pub owned: bool,
 }
 
@@ -33,6 +44,29 @@ unsafe impl Send for VulkanSampler {}
 unsafe impl Sync for VulkanSampler {}
 
 impl VulkanTexture {
+    pub fn clone_unowned(&self) -> Self {
+        Self {
+            image: self.image,
+            view: self.view,
+            memory: self.memory,
+            block_id: self.block_id,
+            offset: self.offset,
+            allocated_size: self.allocated_size,
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            array_layers: self.array_layers,
+            dimension: self.dimension,
+            mip_levels: self.mip_levels,
+            sample_count: self.sample_count,
+            supports_sampled: self.supports_sampled,
+            usage_flags: self.usage_flags,
+            format: self.format,
+            layout: std::sync::Arc::clone(&self.layout),
+            owned: false,
+        }
+    }
+
     #[inline]
     pub fn current_layout(&self) -> vk::ImageLayout {
         match self.layout.lock() {
@@ -77,7 +111,7 @@ impl VulkanDevice {
             usage |= vk::ImageUsageFlags::STORAGE;
         }
         if desc.usage.contains(TextureUsage::RENDER_ATTACHMENT) {
-            if desc.format == TextureFormat::Depth32Float {
+            if desc.format.is_depth() {
                 usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
             } else {
                 usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
@@ -85,30 +119,134 @@ impl VulkanDevice {
         }
 
         let mip_levels = desc.mip_levels.max(1);
+
+        let (image_type, extent, array_layers, view_type) = match desc.dimension {
+            TextureDimension::D1 => {
+                if desc.height != 1 || desc.depth != 1 {
+                    return Err(HalError::InvalidParameter(
+                        "A 1D texture must have height == 1 and depth == 1".to_string(),
+                    ));
+                }
+                (
+                    vk::ImageType::TYPE_1D,
+                    vk::Extent3D {
+                        width: desc.width,
+                        height: 1,
+                        depth: 1,
+                    },
+                    1,
+                    vk::ImageViewType::TYPE_1D,
+                )
+            }
+            TextureDimension::D2 => (
+                vk::ImageType::TYPE_2D,
+                vk::Extent3D {
+                    width: desc.width,
+                    height: desc.height,
+                    depth: 1,
+                },
+                1,
+                vk::ImageViewType::TYPE_2D,
+            ),
+            TextureDimension::D2Array => {
+                if desc.array_layers == 0 {
+                    return Err(HalError::InvalidParameter(
+                        "A 2D array texture needs at least one layer".to_string(),
+                    ));
+                }
+                (
+                    vk::ImageType::TYPE_2D,
+                    vk::Extent3D {
+                        width: desc.width,
+                        height: desc.height,
+                        depth: 1,
+                    },
+                    desc.array_layers,
+                    vk::ImageViewType::TYPE_2D_ARRAY,
+                )
+            }
+            TextureDimension::D3 => (
+                vk::ImageType::TYPE_3D,
+                vk::Extent3D {
+                    width: desc.width,
+                    height: desc.height,
+                    depth: desc.depth.max(1),
+                },
+                1,
+                vk::ImageViewType::TYPE_3D,
+            ),
+            TextureDimension::Cube | TextureDimension::CubeArray => {
+                if desc.width != desc.height {
+                    return Err(HalError::InvalidParameter(format!(
+                        "A cube map must be square, but got {}x{}",
+                        desc.width, desc.height
+                    )));
+                }
+                if desc.array_layers < 6 || desc.array_layers % 6 != 0 {
+                    return Err(HalError::InvalidParameter(format!(
+                        "A cube map needs a multiple of 6 layers, but got {}",
+                        desc.array_layers
+                    )));
+                }
+                (
+                    vk::ImageType::TYPE_2D,
+                    vk::Extent3D {
+                        width: desc.width,
+                        height: desc.height,
+                        depth: 1,
+                    },
+                    desc.array_layers,
+                    if desc.dimension == TextureDimension::Cube {
+                        vk::ImageViewType::CUBE
+                    } else {
+                        vk::ImageViewType::CUBE_ARRAY
+                    },
+                )
+            }
+        };
+
+        // A texture may not have more mip levels than log2(largest extent) + 1.
+        let largest = desc
+            .width
+            .max(desc.height)
+            .max(if image_type == vk::ImageType::TYPE_3D {
+                desc.depth
+            } else {
+                1
+            });
+        let max_mip_levels = 32 - largest.leading_zeros();
+        if mip_levels > max_mip_levels {
+            return Err(HalError::InvalidParameter(format!(
+                "mip_levels {mip_levels} exceeds the maximum {max_mip_levels} for a {largest}-texel texture"
+            )));
+        }
         let sample_count = match desc.sample_count {
+            1 => vk::SampleCountFlags::TYPE_1,
             2 => vk::SampleCountFlags::TYPE_2,
             4 => vk::SampleCountFlags::TYPE_4,
             8 => vk::SampleCountFlags::TYPE_8,
             16 => vk::SampleCountFlags::TYPE_16,
             32 => vk::SampleCountFlags::TYPE_32,
             64 => vk::SampleCountFlags::TYPE_64,
-            _ => vk::SampleCountFlags::TYPE_1,
+            other => {
+                return Err(HalError::InvalidParameter(format!(
+                    "Unsupported sample_count {other}: expected 1, 2, 4, 8, 16, 32, or 64"
+                )))
+            }
         };
 
+        let (sharing_mode, sharing_families) = self.sharing();
         let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
+            .image_type(image_type)
             .format(vk_format)
-            .extent(vk::Extent3D {
-                width: desc.width,
-                height: desc.height,
-                depth: desc.depth.max(1),
-            })
+            .extent(extent)
             .mip_levels(mip_levels)
-            .array_layers(1)
+            .array_layers(array_layers)
             .samples(sample_count)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .sharing_mode(sharing_mode)
+            .queue_family_indices(sharing_families)
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
         let image = unsafe {
@@ -159,8 +297,13 @@ impl VulkanDevice {
             }
         }
 
-        let aspect_mask = if desc.format == TextureFormat::Depth32Float {
+        let aspect_mask = if desc.format.is_depth() {
             vk::ImageAspectFlags::DEPTH
+                | if desc.format.has_stencil() {
+                    vk::ImageAspectFlags::STENCIL
+                } else {
+                    vk::ImageAspectFlags::empty()
+                }
         } else {
             vk::ImageAspectFlags::COLOR
         };
@@ -170,18 +313,34 @@ impl VulkanDevice {
             .base_mip_level(0)
             .level_count(mip_levels)
             .base_array_layer(0)
-            .layer_count(1);
+            .layer_count(array_layers);
 
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
+            .view_type(view_type)
             .format(vk_format)
             .subresource_range(subresource_range);
 
-        let view = unsafe {
-            self.device
-                .create_image_view(&view_info, None)
-                .map_err(|e| HalError::BackendError(format!("vkCreateImageView failed: {e}")))?
+        let view = match unsafe { self.device.create_image_view(&view_info, None) } {
+            Ok(v) => v,
+            Err(e) => {
+                // Release the image and its memory instead of leaking them on the error path.
+                unsafe {
+                    self.device.destroy_image(image, None);
+                    if let Some(block_id) = alloc.block_id {
+                        let mut alloc_lock = match self.allocator.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        alloc_lock.free(block_id, alloc.offset, mem_reqs.size, &self.device);
+                    } else {
+                        self.device.free_memory(alloc.memory, None);
+                    }
+                }
+                return Err(HalError::BackendError(format!(
+                    "vkCreateImageView failed: {e}"
+                )));
+            }
         };
 
         Ok(VulkanTexture {
@@ -193,10 +352,15 @@ impl VulkanDevice {
             allocated_size: mem_reqs.size,
             width: desc.width,
             height: desc.height,
+            depth: extent.depth,
+            array_layers,
+            dimension: desc.dimension,
             mip_levels,
             sample_count: desc.sample_count.max(1),
+            supports_sampled: desc.usage.contains(TextureUsage::TEXTURE_BINDING),
+            usage_flags: usage,
             format: vk_format,
-            layout: std::sync::Mutex::new(vk::ImageLayout::UNDEFINED),
+            layout: std::sync::Arc::new(std::sync::Mutex::new(vk::ImageLayout::UNDEFINED)),
             owned: true,
         })
     }
@@ -346,8 +510,8 @@ impl VulkanDevice {
             .mip_lod_bias(0.0)
             .anisotropy_enable(false)
             .max_anisotropy(1.0)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::NEVER)
+            .compare_enable(desc.compare_enable)
+            .compare_op(desc.compare_op.to_vk())
             .min_lod(0.0)
             .max_lod(vk::LOD_CLAMP_NONE)
             .border_color(vk::BorderColor::FLOAT_TRANSPARENT_BLACK)

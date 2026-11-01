@@ -1,14 +1,17 @@
 # lgpu-hal
 
-Micro Hardware Abstraction Layer for `lgpu` (Lean GPU).
+Hardware abstraction layer for `lgpu`.
 
-Provides zero-overhead, dynamic-loading access to Vulkan 1.3+ dynamic rendering, bindless descriptor indexing (`VK_EXT_descriptor_indexing`), and timeline semaphores.
+It loads the platform Vulkan library at runtime and wraps the Vulkan 1.3 pieces the
+higher level crate needs: dynamic rendering, bindless descriptor indexing
+(`VK_EXT_descriptor_indexing`), timeline semaphores, a memory suballocator and swapchain
+presentation.
 
 ## Features
 
-- **Dynamic Loading**: Loads the platform Vulkan library at runtime without static SDK linkage.
-- **Bindless Descriptor Heaps**: Pre-configured unbounded heaps for storage buffers, textures, samplers, and storage images.
-- **Dynamic Rendering**: Direct dynamic render passes with modern dynamic pipeline states.
-- **Cross-Platform**: Tested and verified across Linux (Wayland/X11), Windows (Win32), and macOS/iOS (via MoltenVK).
+- Runtime loading of the Vulkan library, with no SDK linkage at build time.
+- Bindless descriptor heaps for storage buffers, textures, samplers and storage images.
+- Dynamic render passes with dynamic viewport and scissor state.
+- Surfaces for Linux (Wayland, X11), Windows (Win32) and macOS (MoltenVK).
 
-For the high-level, safe Rust API, see [`lgpu`](https://crates.io/crates/lgpu).
+For the safe Rust API, use [`lgpu`](https://crates.io/crates/lgpu).

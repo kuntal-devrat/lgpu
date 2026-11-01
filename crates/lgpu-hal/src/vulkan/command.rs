@@ -10,6 +10,8 @@ use ash::vk;
 pub struct VulkanCommandRecorder {
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,
+    /// Queue family the command buffer was allocated for; submission must target it.
+    pub queue_family_index: u32,
 }
 
 unsafe impl Send for VulkanCommandRecorder {}
@@ -51,6 +53,29 @@ pub const MAX_CACHED_COMMAND_RECORDERS: usize = 32;
 
 impl VulkanDevice {
     pub fn create_command_recorder(&self) -> Result<VulkanCommandRecorder, HalError> {
+        self.create_recorder_on(self.queue_family_index)
+    }
+
+    /// Creates a command recorder for the dedicated compute queue family.
+    pub fn create_compute_command_recorder(&self) -> Result<VulkanCommandRecorder, HalError> {
+        let family = self.compute_queue_family_index.ok_or_else(|| {
+            HalError::CommandError("This adapter has no separate compute queue family".to_string())
+        })?;
+        self.create_recorder_on(family)
+    }
+
+    fn recorder_cache_for(
+        &self,
+        family: u32,
+    ) -> &std::sync::Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>> {
+        if family == self.queue_family_index {
+            &self.command_recorder_cache
+        } else {
+            &self.compute_recorder_cache
+        }
+    }
+
+    fn create_recorder_on(&self, family: u32) -> Result<VulkanCommandRecorder, HalError> {
         // Harvest any completed async command recorders back into cache
         {
             let current_val = unsafe {
@@ -62,7 +87,7 @@ impl VulkanDevice {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            let mut cache = match self.command_recorder_cache.lock() {
+            let mut cache = match self.recorder_cache_for(family).lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
@@ -117,7 +142,7 @@ impl VulkanDevice {
         }
 
         let cached_item = {
-            let mut cache = match self.command_recorder_cache.lock() {
+            let mut cache = match self.recorder_cache_for(family).lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
@@ -135,7 +160,7 @@ impl VulkanDevice {
             }
             None => {
                 let pool_info = vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(self.queue_family_index)
+                    .queue_family_index(family)
                     .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
                 let command_pool = unsafe {
@@ -183,7 +208,7 @@ impl VulkanDevice {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
         } {
-            let mut cache = match self.command_recorder_cache.lock() {
+            let mut cache = match self.recorder_cache_for(family).lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
@@ -200,6 +225,7 @@ impl VulkanDevice {
         Ok(VulkanCommandRecorder {
             command_pool,
             command_buffer,
+            queue_family_index: family,
         })
     }
 
@@ -210,7 +236,7 @@ impl VulkanDevice {
                 vk::CommandBufferResetFlags::empty(),
             );
         }
-        let mut cache = match self.command_recorder_cache.lock() {
+        let mut cache = match self.recorder_cache_for(recorder.queue_family_index).lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
@@ -524,6 +550,7 @@ impl VulkanDevice {
         Ok(())
     }
 
+    /// Draws with the default state: no MSAA resolve target and no vertex buffers bound.
     fn cmd_draw_internal(
         &self,
         recorder: &VulkanCommandRecorder,
@@ -531,6 +558,57 @@ impl VulkanDevice {
         depth: Option<(&VulkanTexture, crate::DepthLoadOp)>,
         pipeline: vk::Pipeline,
         draw_cmd: DrawCommand<'_>,
+        push_constants: &[u8],
+        color_load_op: crate::ColorLoadOp,
+    ) -> Result<(), HalError> {
+        self.cmd_draw_internal_ext(
+            recorder,
+            color_texture,
+            depth,
+            None,
+            pipeline,
+            draw_cmd,
+            &[],
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    /// Full draw path used by the high level API, with optional MSAA resolve and vertex buffers.
+    pub fn cmd_draw_with_ops_ex(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        color_texture: &VulkanTexture,
+        resolve_texture: Option<&VulkanTexture>,
+        depth: Option<(&VulkanTexture, crate::DepthLoadOp)>,
+        pipeline: vk::Pipeline,
+        draw_cmd: DrawCommand<'_>,
+        vertex_buffers: &[(vk::Buffer, u64)],
+        push_constants: &[u8],
+        color_load_op: crate::ColorLoadOp,
+    ) -> Result<(), HalError> {
+        self.cmd_draw_internal_ext(
+            recorder,
+            color_texture,
+            depth,
+            resolve_texture,
+            pipeline,
+            draw_cmd,
+            vertex_buffers,
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    fn cmd_draw_internal_ext(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        color_texture: &VulkanTexture,
+        depth: Option<(&VulkanTexture, crate::DepthLoadOp)>,
+        resolve_texture: Option<&VulkanTexture>,
+        pipeline: vk::Pipeline,
+        draw_cmd: DrawCommand<'_>,
+        vertex_buffers: &[(vk::Buffer, u64)],
         push_constants: &[u8],
         color_load_op: crate::ColorLoadOp,
     ) -> Result<(), HalError> {
@@ -544,6 +622,34 @@ impl VulkanDevice {
                 push_constants.len(),
                 bindless::PUSH_CONSTANT_SIZE
             )));
+        }
+
+        if let Some(resolve) = resolve_texture {
+            if color_texture.sample_count <= 1 {
+                return Err(HalError::InvalidParameter(format!(
+                    "A resolve target requires a multisampled color attachment, but the attachment has {} sample(s)",
+                    color_texture.sample_count
+                )));
+            }
+            if resolve.sample_count != 1 {
+                return Err(HalError::InvalidParameter(format!(
+                    "The resolve target must be single sampled, but it has {} samples",
+                    resolve.sample_count
+                )));
+            }
+            if resolve.format != color_texture.format {
+                return Err(HalError::InvalidParameter(format!(
+                    "Resolve target format {} does not match attachment format {}",
+                    resolve.format.as_raw(),
+                    color_texture.format.as_raw()
+                )));
+            }
+            if resolve.width != color_texture.width || resolve.height != color_texture.height {
+                return Err(HalError::InvalidParameter(format!(
+                    "Resolve target is {}x{} but the attachment is {}x{}",
+                    resolve.width, resolve.height, color_texture.width, color_texture.height
+                )));
+            }
         }
 
         unsafe {
@@ -655,6 +761,41 @@ impl VulkanDevice {
                 depth_attachment_val = Some(depth_attachment);
             }
 
+            if let Some(resolve) = resolve_texture {
+                let old_layout =
+                    resolve.transition_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+                let (src_stage, src_access) = match old_layout {
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    ),
+                    _ => (
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::empty(),
+                    ),
+                };
+                barriers.push(
+                    vk::ImageMemoryBarrier2::default()
+                        .old_layout(old_layout)
+                        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .src_stage_mask(src_stage)
+                        .src_access_mask(src_access)
+                        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(resolve.image)
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .base_mip_level(0)
+                                .level_count(1)
+                                .base_array_layer(0)
+                                .layer_count(1),
+                        ),
+                );
+            }
+
             let dep_info = vk::DependencyInfo::default().image_memory_barriers(&barriers);
             self.device
                 .cmd_pipeline_barrier2(recorder.command_buffer, &dep_info);
@@ -672,12 +813,19 @@ impl VulkanDevice {
                 }
             };
 
-            let color_attachment = vk::RenderingAttachmentInfo::default()
+            let mut color_attachment = vk::RenderingAttachmentInfo::default()
                 .image_view(color_texture.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .load_op(color_load_op_vk)
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(clear_color_value);
+
+            if let Some(resolve) = resolve_texture {
+                color_attachment = color_attachment
+                    .resolve_image_view(resolve.view)
+                    .resolve_mode(vk::ResolveModeFlags::AVERAGE)
+                    .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            }
 
             let color_attachments = [color_attachment];
             let render_area = vk::Rect2D {
@@ -740,6 +888,13 @@ impl VulkanDevice {
                     0,
                     &aligned_pc[..aligned_len],
                 );
+            }
+
+            if !vertex_buffers.is_empty() {
+                let buffers: Vec<vk::Buffer> = vertex_buffers.iter().map(|(b, _)| *b).collect();
+                let offsets: Vec<u64> = vertex_buffers.iter().map(|(_, o)| *o).collect();
+                self.device
+                    .cmd_bind_vertex_buffers(recorder.command_buffer, 0, &buffers, &offsets);
             }
 
             match draw_cmd {
@@ -844,6 +999,57 @@ impl VulkanDevice {
             if let Some((depth_texture, _)) = depth {
                 depth_texture.transition_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
             }
+
+            if let Some(resolve) = resolve_texture {
+                // A resolve target that was not created with sampled usage may not be moved to
+                // SHADER_READ_ONLY_OPTIMAL; leaving it as a color attachment is valid.
+                let new_layout = if !resolve.owned {
+                    Some(vk::ImageLayout::PRESENT_SRC_KHR)
+                } else if resolve.supports_sampled {
+                    Some(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                } else {
+                    None
+                };
+
+                let Some(new_layout) = new_layout else {
+                    return Ok(());
+                };
+
+                let dst_stage = if resolve.owned {
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER
+                        | vk::PipelineStageFlags2::COMPUTE_SHADER
+                } else {
+                    vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+                };
+                let dst_access = if resolve.owned {
+                    vk::AccessFlags2::SHADER_READ
+                } else {
+                    vk::AccessFlags2::empty()
+                };
+                let barrier = vk::ImageMemoryBarrier2::default()
+                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .new_layout(new_layout)
+                    .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                    .dst_stage_mask(dst_stage)
+                    .dst_access_mask(dst_access)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(resolve.image)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+                let dep = vk::DependencyInfo::default()
+                    .image_memory_barriers(std::slice::from_ref(&barrier));
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &dep);
+                resolve.transition_layout(new_layout);
+            }
         }
         Ok(())
     }
@@ -944,6 +1150,7 @@ impl VulkanDevice {
         color_textures: &[&VulkanTexture],
         depth_texture: Option<&VulkanTexture>,
         pipeline: vk::Pipeline,
+        vertex_buffers: &[(vk::Buffer, u64)],
         vertex_count: u32,
         instance_count: u32,
         first_vertex: u32,
@@ -1153,6 +1360,13 @@ impl VulkanDevice {
                     0,
                     &aligned_pc[..aligned_len],
                 );
+            }
+
+            if !vertex_buffers.is_empty() {
+                let buffers: Vec<vk::Buffer> = vertex_buffers.iter().map(|(b, _)| *b).collect();
+                let offsets: Vec<u64> = vertex_buffers.iter().map(|(_, o)| *o).collect();
+                self.device
+                    .cmd_bind_vertex_buffers(recorder.command_buffer, 0, &buffers, &offsets);
             }
 
             self.device.cmd_draw(
@@ -1475,21 +1689,21 @@ impl VulkanDevice {
             }
 
             let subresource = vk::ImageSubresourceLayers::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .aspect_mask(Self::image_aspect(texture))
                 .mip_level(0)
                 .base_array_layer(0)
-                .layer_count(1);
+                .layer_count(Self::copy_layer_count(texture));
 
             let copy_region = vk::BufferImageCopy::default()
                 .buffer_offset(0)
-                .buffer_row_length(texture.width)
-                .buffer_image_height(texture.height)
+                .buffer_row_length(0)
+                .buffer_image_height(0)
                 .image_subresource(subresource)
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
                 .image_extent(vk::Extent3D {
                     width: texture.width,
                     height: texture.height,
-                    depth: 1,
+                    depth: texture.depth.max(1),
                 });
 
             self.device.cmd_copy_buffer_to_image(
@@ -1503,6 +1717,40 @@ impl VulkanDevice {
     }
 
     pub fn write_texture(&self, texture: &VulkanTexture, data: &[u8]) -> Result<(), HalError> {
+        if texture.sample_count > 1 {
+            return Err(HalError::InvalidParameter(format!(
+                "Cannot upload to a multisampled texture ({} samples)",
+                texture.sample_count
+            )));
+        }
+        if let Some(format) = crate::TextureFormat::from_vk(texture.format) {
+            if format.is_depth() {
+                return Err(HalError::InvalidParameter(
+                    "write_texture does not support depth formats".to_string(),
+                ));
+            }
+            let slices = texture.depth.max(1) as u64
+                * if texture.depth > 1 {
+                    1
+                } else {
+                    texture.array_layers.max(1) as u64
+                };
+            let required = (texture.width as u64)
+                .saturating_mul(texture.height as u64)
+                .saturating_mul(format.bytes_per_pixel() as u64)
+                .saturating_mul(slices);
+            if (data.len() as u64) < required {
+                return Err(HalError::InvalidParameter(format!(
+                    "Texture upload of {} bytes is smaller than the {} bytes required for a {}x{} {:?} texture",
+                    data.len(),
+                    required,
+                    texture.width,
+                    texture.height,
+                    format
+                )));
+            }
+        }
+
         let mut staging_guard = match self.staging_ring.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -1708,6 +1956,344 @@ impl VulkanDevice {
         Ok(())
     }
 
+    fn image_aspect(texture: &VulkanTexture) -> vk::ImageAspectFlags {
+        match texture.format {
+            vk::Format::D16_UNORM | vk::Format::D32_SFLOAT => vk::ImageAspectFlags::DEPTH,
+            vk::Format::D24_UNORM_S8_UINT | vk::Format::D32_SFLOAT_S8_UINT => {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            }
+            _ => vk::ImageAspectFlags::COLOR,
+        }
+    }
+
+    /// Layers a whole-image copy touches: 3D images copy every slice of layer 0, arrays copy
+    /// every layer of slice 0.
+    fn copy_layer_count(texture: &VulkanTexture) -> u32 {
+        if texture.depth > 1 {
+            1
+        } else {
+            texture.array_layers.max(1)
+        }
+    }
+
+    /// Transitions the whole image and returns the previous layout.
+    #[allow(clippy::too_many_arguments)]
+    fn cmd_transition_full(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        texture: &VulkanTexture,
+        new_layout: vk::ImageLayout,
+        src_stage: vk::PipelineStageFlags2,
+        src_access: vk::AccessFlags2,
+        dst_stage: vk::PipelineStageFlags2,
+        dst_access: vk::AccessFlags2,
+    ) -> vk::ImageLayout {
+        let old_layout = texture.transition_layout(new_layout);
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(Self::image_aspect(texture))
+            .base_mip_level(0)
+            .level_count(texture.mip_levels.max(1))
+            .base_array_layer(0)
+            .layer_count(1);
+        let barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(texture.image)
+            .subresource_range(range);
+        let barriers = [barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+        unsafe {
+            self.device
+                .cmd_pipeline_barrier2(recorder.command_buffer, &dep);
+        }
+        old_layout
+    }
+
+    /// Uploads one mip level. `row_pitch` is in bytes; `None` means tightly packed rows.
+    pub fn write_texture_mip(
+        &self,
+        texture: &VulkanTexture,
+        mip_level: u32,
+        data: &[u8],
+        row_pitch: Option<u32>,
+    ) -> Result<(), HalError> {
+        if texture.sample_count > 1 {
+            return Err(HalError::InvalidParameter(
+                "Cannot upload to a multisampled texture".to_string(),
+            ));
+        }
+        if mip_level >= texture.mip_levels {
+            return Err(HalError::InvalidParameter(format!(
+                "Mip level {mip_level} is out of range for a texture with {} levels",
+                texture.mip_levels
+            )));
+        }
+        let format = crate::TextureFormat::from_vk(texture.format).ok_or_else(|| {
+            HalError::InvalidParameter("Unsupported texture format for upload".to_string())
+        })?;
+        if format == crate::TextureFormat::Depth32Float {
+            return Err(HalError::InvalidParameter(
+                "Texture uploads do not support depth formats".to_string(),
+            ));
+        }
+
+        let mip_width = (texture.width >> mip_level).max(1);
+        let mip_height = (texture.height >> mip_level).max(1);
+        let mip_depth = if texture.depth > 1 {
+            (texture.depth >> mip_level).max(1)
+        } else {
+            1
+        };
+        let layer_count = Self::copy_layer_count(texture);
+        let slice_count = mip_depth as u64 * layer_count as u64;
+        let bytes_per_pixel = format.bytes_per_pixel();
+        let packed_row = mip_width * bytes_per_pixel;
+        let row_bytes = row_pitch.unwrap_or(packed_row);
+        if row_bytes < packed_row {
+            return Err(HalError::InvalidParameter(format!(
+                "Row pitch {row_bytes} is smaller than the {packed_row} byte packed row"
+            )));
+        }
+        let slice_bytes = row_bytes as u64 * (mip_height as u64 - 1) + packed_row as u64;
+        let required = slice_bytes * slice_count;
+        if (data.len() as u64) < required {
+            return Err(HalError::InvalidParameter(format!(
+                "Mip {mip_level} needs {required} bytes, but {} were given",
+                data.len()
+            )));
+        }
+
+        let staging = self.create_buffer(&crate::BufferDesc {
+            label: Some("texture_mip_upload"),
+            size: required,
+            usage: crate::BufferUsage::TRANSFER_SRC,
+            memory_location: crate::MemoryLocation::CpuToGpu,
+        })?;
+        if let Err(e) = self.write_buffer(&staging, 0, &data[..required as usize]) {
+            self.destroy_buffer(staging);
+            return Err(e);
+        }
+
+        let recorder = self.create_command_recorder()?;
+        self.cmd_transition_full(
+            &recorder,
+            texture,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::PipelineStageFlags2::TOP_OF_PIPE,
+            vk::AccessFlags2::empty(),
+            vk::PipelineStageFlags2::TRANSFER,
+            vk::AccessFlags2::TRANSFER_WRITE,
+        );
+
+        let tightly_packed = row_bytes == packed_row;
+        let region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(if tightly_packed {
+                0
+            } else {
+                row_bytes / bytes_per_pixel
+            })
+            .buffer_image_height(if tightly_packed { 0 } else { mip_height })
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(Self::image_aspect(texture))
+                    .mip_level(mip_level)
+                    .base_array_layer(0)
+                    .layer_count(layer_count),
+            )
+            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .image_extent(vk::Extent3D {
+                width: mip_width,
+                height: mip_height,
+                depth: mip_depth,
+            });
+
+        unsafe {
+            self.device.cmd_copy_buffer_to_image(
+                recorder.command_buffer,
+                staging.buffer,
+                texture.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            );
+        }
+
+        let final_layout = if texture.supports_sampled {
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        } else if texture
+            .usage_flags
+            .contains(vk::ImageUsageFlags::TRANSFER_SRC)
+        {
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+        } else {
+            vk::ImageLayout::GENERAL
+        };
+        let (dst_stage, dst_access) = if texture.supports_sampled {
+            (
+                vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_READ,
+            )
+        } else {
+            (
+                vk::PipelineStageFlags2::TRANSFER,
+                vk::AccessFlags2::TRANSFER_READ,
+            )
+        };
+        self.cmd_transition_full(
+            &recorder,
+            texture,
+            final_layout,
+            vk::PipelineStageFlags2::TRANSFER,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            dst_stage,
+            dst_access,
+        );
+
+        let result = self.submit_and_wait(recorder);
+        self.destroy_buffer(staging);
+        result
+    }
+
+    /// Generates the mip chain by blitting each level from the previous one. The texture must
+    /// have been created with `TEXTURE_BINDING | COPY_SRC | COPY_DST`.
+    pub fn generate_mipmaps(&self, texture: &VulkanTexture) -> Result<(), HalError> {
+        if texture.mip_levels <= 1 {
+            return Ok(());
+        }
+        if texture.sample_count > 1 {
+            return Err(HalError::InvalidParameter(
+                "Mipmap generation does not support multisampled textures".to_string(),
+            ));
+        }
+        let required = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED;
+        if !texture.usage_flags.contains(required) {
+            return Err(HalError::InvalidParameter(
+                "Mipmap generation requires TEXTURE_BINDING | COPY_SRC | COPY_DST".to_string(),
+            ));
+        }
+
+        let recorder = self.create_command_recorder()?;
+        let aspect = Self::image_aspect(texture);
+
+        // GENERAL is legal for both the blit source and destination, which keeps the tracked
+        // image layout consistent across levels.
+        self.cmd_transition_full(
+            &recorder,
+            texture,
+            vk::ImageLayout::GENERAL,
+            vk::PipelineStageFlags2::TRANSFER,
+            vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::TRANSFER_WRITE,
+            vk::PipelineStageFlags2::TRANSFER,
+            vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::TRANSFER_WRITE,
+        );
+
+        let layer_count = Self::copy_layer_count(texture);
+        for level in 1..texture.mip_levels {
+            let range = vk::ImageSubresourceRange::default()
+                .aspect_mask(aspect)
+                .base_mip_level(level)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(layer_count);
+            let barrier = vk::ImageMemoryBarrier2::default()
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .image(texture.image)
+                .subresource_range(range);
+            let dep =
+                vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&barrier));
+
+            let src_extent = vk::Extent3D {
+                width: (texture.width >> (level - 1)).max(1),
+                height: (texture.height >> (level - 1)).max(1),
+                depth: if texture.depth > 1 {
+                    (texture.depth >> (level - 1)).max(1)
+                } else {
+                    1
+                },
+            };
+            let dst_extent = vk::Extent3D {
+                width: (texture.width >> level).max(1),
+                height: (texture.height >> level).max(1),
+                depth: if texture.depth > 1 {
+                    (texture.depth >> level).max(1)
+                } else {
+                    1
+                },
+            };
+
+            let blit = vk::ImageBlit::default()
+                .src_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(aspect)
+                        .mip_level(level - 1)
+                        .base_array_layer(0)
+                        .layer_count(layer_count),
+                )
+                .src_offsets([
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: src_extent.width as i32,
+                        y: src_extent.height as i32,
+                        z: src_extent.depth as i32,
+                    },
+                ])
+                .dst_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(aspect)
+                        .mip_level(level)
+                        .base_array_layer(0)
+                        .layer_count(layer_count),
+                )
+                .dst_offsets([
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: dst_extent.width as i32,
+                        y: dst_extent.height as i32,
+                        z: dst_extent.depth as i32,
+                    },
+                ]);
+
+            unsafe {
+                self.device
+                    .cmd_pipeline_barrier2(recorder.command_buffer, &dep);
+                self.device.cmd_blit_image(
+                    recorder.command_buffer,
+                    texture.image,
+                    vk::ImageLayout::GENERAL,
+                    texture.image,
+                    vk::ImageLayout::GENERAL,
+                    &[blit],
+                    vk::Filter::LINEAR,
+                );
+            }
+        }
+
+        self.cmd_transition_full(
+            &recorder,
+            texture,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags2::TRANSFER,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_READ,
+        );
+
+        self.submit_and_wait(recorder)
+    }
+
     pub fn cmd_copy_image_to_buffer(
         &self,
         recorder: &VulkanCommandRecorder,
@@ -1761,21 +2347,21 @@ impl VulkanDevice {
             }
 
             let subresource = vk::ImageSubresourceLayers::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .aspect_mask(Self::image_aspect(texture))
                 .mip_level(0)
                 .base_array_layer(0)
-                .layer_count(1);
+                .layer_count(Self::copy_layer_count(texture));
 
             let copy_region = vk::BufferImageCopy::default()
                 .buffer_offset(0)
-                .buffer_row_length(texture.width)
-                .buffer_image_height(texture.height)
+                .buffer_row_length(0)
+                .buffer_image_height(0)
                 .image_subresource(subresource)
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
                 .image_extent(vk::Extent3D {
                     width: texture.width,
                     height: texture.height,
-                    depth: 1,
+                    depth: texture.depth.max(1),
                 });
 
             self.device.cmd_copy_image_to_buffer(
@@ -1794,6 +2380,7 @@ impl VulkanDevice {
         wait_semaphores: &[(&VulkanTimelineSemaphore, u64)],
         signal_semaphores: &[(&VulkanTimelineSemaphore, u64)],
         sync_fence: Option<vk::Fence>,
+        queue_family: u32,
     ) -> Result<(), HalError> {
         if recorders.is_empty() {
             return Ok(());
@@ -1839,7 +2426,18 @@ impl VulkanDevice {
 
             let fence = sync_fence.unwrap_or(vk::Fence::null());
             let next_val = {
-                let queue = match self.queue.lock() {
+                // The guard must cover the whole submission, including the timeline value
+                // allocation, or concurrent submits can signal out of order and races the queue.
+                let queue_mutex = if queue_family == self.queue_family_index {
+                    &self.queue
+                } else {
+                    self.compute_queue.as_ref().ok_or_else(|| {
+                        HalError::CommandError(
+                            "No compute queue is available on this device".to_string(),
+                        )
+                    })?
+                };
+                let queue_guard = match queue_mutex.lock() {
                     Ok(g) => g,
                     Err(p) => p.into_inner(),
                 };
@@ -1861,7 +2459,10 @@ impl VulkanDevice {
                     .signal_semaphores(&vk_signal_sems)
                     .push_next(&mut timeline_info);
 
-                if let Err(e) = self.device.queue_submit(*queue, &[submit_info], fence) {
+                if let Err(e) = self
+                    .device
+                    .queue_submit(*queue_guard, &[submit_info], fence)
+                {
                     return Err(HalError::CommandError(e.to_string()));
                 }
                 next_val
@@ -1944,7 +2545,13 @@ impl VulkanDevice {
                 }
             }
         };
-        let res = self.submit_batches_internal(vec![recorder], &[], &[], Some(fence));
+        let res = self.submit_batches_internal(
+            vec![recorder],
+            &[],
+            &[],
+            Some(fence),
+            self.queue_family_index,
+        );
         if res.is_err() {
             unsafe {
                 self.device.reset_fences(&[fence]).ok();
@@ -1980,7 +2587,8 @@ impl VulkanDevice {
                 }
             }
         };
-        let res = self.submit_batches_internal(recorders, &[], &[], Some(fence));
+        let res =
+            self.submit_batches_internal(recorders, &[], &[], Some(fence), self.queue_family_index);
         if res.is_err() {
             unsafe {
                 self.device.reset_fences(&[fence]).ok();
@@ -2000,7 +2608,137 @@ impl VulkanDevice {
         wait_semaphores: &[(&VulkanTimelineSemaphore, u64)],
         signal_semaphores: &[(&VulkanTimelineSemaphore, u64)],
     ) -> Result<(), HalError> {
-        self.submit_batches_internal(recorders, wait_semaphores, signal_semaphores, None)
+        self.submit_batches_async_on(
+            self.queue_family_index,
+            recorders,
+            wait_semaphores,
+            signal_semaphores,
+        )
+    }
+
+    /// Async submission on an explicit queue family, used for the async compute queue.
+    pub fn submit_batches_async_on(
+        &self,
+        queue_family: u32,
+        recorders: Vec<VulkanCommandRecorder>,
+        wait_semaphores: &[(&VulkanTimelineSemaphore, u64)],
+        signal_semaphores: &[(&VulkanTimelineSemaphore, u64)],
+    ) -> Result<(), HalError> {
+        self.submit_batches_internal(
+            recorders,
+            wait_semaphores,
+            signal_semaphores,
+            None,
+            queue_family,
+        )
+    }
+
+    /// Submits a recorder to the dedicated compute queue and waits for completion.
+    pub fn submit_compute_and_wait(&self, recorder: VulkanCommandRecorder) -> Result<(), HalError> {
+        let family = self.compute_queue_family_index.ok_or_else(|| {
+            HalError::CommandError("This adapter has no separate compute queue family".to_string())
+        })?;
+        let fence = {
+            let mut cache = match self.fence_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.pop()
+        };
+        let fence = match fence {
+            Some(f) => f,
+            None => {
+                let fence_info = vk::FenceCreateInfo::default();
+                unsafe {
+                    self.device.create_fence(&fence_info, None).map_err(|e| {
+                        HalError::CommandError(format!("Failed to create fence: {e}"))
+                    })?
+                }
+            }
+        };
+        let res = self.submit_batches_internal(vec![recorder], &[], &[], Some(fence), family);
+        if res.is_err() {
+            unsafe {
+                self.device.reset_fences(&[fence]).ok();
+                let mut cache = match self.fence_cache.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                cache.push(fence);
+            }
+        }
+        res
+    }
+
+    /// Submits several recorders to the dedicated compute queue and waits for completion.
+    pub fn submit_compute_batches_and_wait(
+        &self,
+        recorders: Vec<VulkanCommandRecorder>,
+    ) -> Result<(), HalError> {
+        let family = self.compute_queue_family_index.ok_or_else(|| {
+            HalError::CommandError("This adapter has no separate compute queue family".to_string())
+        })?;
+        let fence = {
+            let mut cache = match self.fence_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            cache.pop()
+        };
+        let fence = match fence {
+            Some(f) => f,
+            None => {
+                let fence_info = vk::FenceCreateInfo::default();
+                unsafe {
+                    self.device.create_fence(&fence_info, None).map_err(|e| {
+                        HalError::CommandError(format!("Failed to create fence: {e}"))
+                    })?
+                }
+            }
+        };
+        let res = self.submit_batches_internal(recorders, &[], &[], Some(fence), family);
+        if res.is_err() {
+            unsafe {
+                self.device.reset_fences(&[fence]).ok();
+                let mut cache = match self.fence_cache.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                cache.push(fence);
+            }
+        }
+        res
+    }
+
+    /// Labels the following commands in GPU debuggers such as RenderDoc.
+    pub fn cmd_begin_debug_label(
+        &self,
+        recorder: &VulkanCommandRecorder,
+        name: &str,
+        color: [f32; 4],
+    ) {
+        let Some(loader) = &self.debug_utils_device else {
+            return;
+        };
+        let Ok(name) = std::ffi::CString::new(name) else {
+            return;
+        };
+        let label = vk::DebugUtilsLabelEXT::default()
+            .label_name(&name)
+            .color(color);
+        unsafe {
+            loader.cmd_begin_debug_utils_label(recorder.command_buffer, &label);
+        }
+    }
+
+    /// Closes a label opened with [`VulkanDevice::cmd_begin_debug_label`].
+    pub fn cmd_end_debug_label(&self, recorder: &VulkanCommandRecorder) {
+        let Some(loader) = &self.debug_utils_device else {
+            return;
+        };
+        unsafe {
+            loader.cmd_end_debug_utils_label(recorder.command_buffer);
+        }
     }
 
     pub fn cmd_memory_barrier(&self, recorder: &VulkanCommandRecorder) {

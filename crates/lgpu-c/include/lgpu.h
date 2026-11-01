@@ -32,6 +32,7 @@ typedef struct lgpu_graphics_pipeline_s* lgpu_graphics_pipeline_t;
 typedef struct lgpu_bindless_compute_pipeline_s* lgpu_bindless_compute_pipeline_t;
 typedef struct lgpu_surface_s*         lgpu_surface_t;
 typedef struct lgpu_surface_texture_s* lgpu_surface_texture_t;
+typedef struct lgpu_timestamp_pool_s*  lgpu_timestamp_pool_t;
 
 typedef struct lgpu_adapter_info {
     char name[256];
@@ -563,6 +564,131 @@ void lgpu_surface_texture_destroy(lgpu_surface_texture_t surface_texture);
 
 /** Destroy window surface */
 void lgpu_destroy_surface(lgpu_surface_t surface);
+
+/* === Texture dimensions, uploads and mipmaps === */
+/** dimension: 0 = 2D, 1 = 2D array, 2 = 3D, 3 = cube, 4 = cube array, 5 = 1D */
+lgpu_result_t lgpu_create_texture_ex(
+    lgpu_device_t device,
+    uint32_t width,
+    uint32_t height,
+    uint32_t depth,
+    uint32_t array_layers,
+    int32_t dimension,
+    uint32_t mip_levels,
+    uint32_t sample_count,
+    int32_t format,
+    uint32_t usage,
+    lgpu_texture_t* out_texture
+);
+
+/** Upload one mip level; row_pitch of 0 means tightly packed rows. */
+lgpu_result_t lgpu_device_write_texture_mip(
+    lgpu_device_t device,
+    lgpu_texture_t texture,
+    uint32_t mip_level,
+    const void* data,
+    size_t data_len,
+    uint32_t row_pitch
+);
+
+/** Generate the full mip chain with GPU blits. */
+lgpu_result_t lgpu_device_generate_mipmaps(lgpu_device_t device, lgpu_texture_t texture);
+
+/* === Vertex input, MSAA resolve and uniform slots === */
+void lgpu_encoder_bind_vertex_buffer(
+    lgpu_command_encoder_t encoder,
+    uint32_t binding,
+    lgpu_buffer_t buffer,
+    uint64_t offset
+);
+void lgpu_encoder_unbind_vertex_buffers(lgpu_command_encoder_t encoder);
+int32_t lgpu_buffer_get_uniform_id(lgpu_buffer_t buffer);
+lgpu_result_t lgpu_device_write_uniform_buffer_descriptor(
+    lgpu_device_t device,
+    uint32_t slot,
+    lgpu_buffer_t buffer
+);
+/** resolve and depth may be NULL. */
+lgpu_result_t lgpu_encoder_draw_with_resolve(
+    lgpu_command_encoder_t encoder,
+    lgpu_texture_t color_texture,
+    lgpu_texture_t resolve,
+    lgpu_texture_t depth,
+    lgpu_graphics_pipeline_t pipeline,
+    uint32_t vertex_count,
+    const void* push_constants,
+    size_t push_constants_size,
+    const float* clear_color,
+    float clear_depth
+);
+
+/* === GPU timestamps === */
+lgpu_result_t lgpu_create_timestamp_pool(
+    lgpu_device_t device,
+    uint32_t count,
+    lgpu_timestamp_pool_t* out_pool
+);
+void lgpu_destroy_timestamp_pool(lgpu_timestamp_pool_t pool);
+uint32_t lgpu_timestamp_pool_count(lgpu_timestamp_pool_t pool);
+/** Reads nanoseconds; the submission that wrote the queries must have completed. */
+lgpu_result_t lgpu_timestamp_pool_read(
+    lgpu_timestamp_pool_t pool,
+    uint64_t* out_values,
+    uint32_t capacity
+);
+void lgpu_encoder_reset_timestamp_pool(
+    lgpu_command_encoder_t encoder,
+    lgpu_timestamp_pool_t pool
+);
+lgpu_result_t lgpu_encoder_write_timestamp(
+    lgpu_command_encoder_t encoder,
+    lgpu_timestamp_pool_t pool,
+    uint32_t index
+);
+
+/* === Device-local buffers, debug labels and comparison samplers === */
+lgpu_result_t lgpu_device_create_buffer_init_device_local(
+    lgpu_device_t device,
+    uint64_t size,
+    uint32_t usage,
+    const void* data,
+    size_t data_len,
+    lgpu_buffer_t* out_buffer
+);
+void lgpu_encoder_begin_debug_label(
+    lgpu_command_encoder_t encoder,
+    const char* name,
+    float r,
+    float g,
+    float b,
+    float a
+);
+void lgpu_encoder_end_debug_label(lgpu_command_encoder_t encoder);
+/** compare_op: 0 = never, 1 = less, 2 = equal, 3 = less-equal, 4 = greater, 5 = not-equal,
+ *  6 = greater-equal, 7 = always. */
+lgpu_result_t lgpu_create_sampler_ex(
+    lgpu_device_t device,
+    int32_t min_filter,
+    int32_t mag_filter,
+    int32_t mipmap_filter,
+    int32_t address_u,
+    int32_t address_v,
+    int32_t address_w,
+    bool compare_enable,
+    int32_t compare_op,
+    lgpu_sampler_t* out_sampler
+);
+
+/* === Async compute queue === */
+bool lgpu_device_has_async_compute_queue(lgpu_device_t device);
+lgpu_result_t lgpu_device_get_compute_queue(
+    lgpu_device_t device,
+    lgpu_queue_t* out_queue
+);
+lgpu_result_t lgpu_create_compute_encoder(
+    lgpu_device_t device,
+    lgpu_command_encoder_t* out_encoder
+);
 
 /* === Resource Destruction === */
 void lgpu_destroy_command_encoder(lgpu_command_encoder_t encoder);

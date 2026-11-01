@@ -5,7 +5,8 @@
 //! to a staging buffer, and verifies every single pixel on the CPU.
 
 use lgpu::{
-    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureFormat, TextureUsage,
+    BufferDesc, BufferUsage, Instance, MemoryLocation, TextureDesc, TextureDimension,
+    TextureFormat, TextureUsage,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,6 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: WIDTH,
         height: HEIGHT,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,

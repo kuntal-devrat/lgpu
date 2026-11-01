@@ -372,6 +372,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-textured-mesh"
+version = "0.1.5"
+dependencies = [
+ "bytemuck",
+ "lgpu",
+]
+
+[[package]]
 name = "example-voxel-renderer"
 version = "0.1.5"
 dependencies = [
@@ -383,6 +391,15 @@ dependencies = [
 
 [[package]]
 name = "example-window-shader"
+version = "0.1.5"
+dependencies = [
+ "bytemuck",
+ "lgpu",
+ "winit",
+]
+
+[[package]]
+name = "example-windowed-mesh"
 version = "0.1.5"
 dependencies = [
  "bytemuck",

@@ -89,27 +89,45 @@ impl VulkanStagingRing {
             })?
         };
 
-        unsafe {
-            device
-                .bind_buffer_memory(buffer, memory, 0)
-                .map_err(|e| HalError::BackendError(format!("Failed to bind staging ring: {e}")))?;
+        if let Err(e) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
+            unsafe {
+                device.destroy_buffer(buffer, None);
+                device.free_memory(memory, None);
+            }
+            return Err(HalError::BackendError(format!(
+                "Failed to bind staging ring: {e}"
+            )));
         }
 
-        let mapped = unsafe {
-            device
-                .map_memory(memory, 0, capacity, vk::MemoryMapFlags::empty())
-                .map_err(|e| HalError::MapError(e.to_string()))?
-        };
+        let mapped =
+            match unsafe { device.map_memory(memory, 0, capacity, vk::MemoryMapFlags::empty()) } {
+                Ok(ptr) => ptr,
+                Err(e) => {
+                    unsafe {
+                        device.destroy_buffer(buffer, None);
+                        device.free_memory(memory, None);
+                    }
+                    return Err(HalError::MapError(e.to_string()));
+                }
+            };
 
         let mut type_info = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(0);
 
         let sem_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-        let timeline_semaphore = unsafe {
-            device.create_semaphore(&sem_info, None).map_err(|e| {
-                HalError::BackendError(format!("Failed to create staging timeline semaphore: {e}"))
-            })?
+        let timeline_semaphore = match unsafe { device.create_semaphore(&sem_info, None) } {
+            Ok(semaphore) => semaphore,
+            Err(e) => {
+                unsafe {
+                    device.unmap_memory(memory);
+                    device.destroy_buffer(buffer, None);
+                    device.free_memory(memory, None);
+                }
+                return Err(HalError::BackendError(format!(
+                    "Failed to create staging timeline semaphore: {e}"
+                )));
+            }
         };
 
         Ok(Self {

@@ -92,24 +92,9 @@ impl Texture {
 
     pub fn clone_unowned(&self) -> Self {
         Self {
-            hal_texture: self
-                .hal_texture
-                .as_ref()
-                .map(|t| lgpu_hal::vulkan::VulkanTexture {
-                    image: t.image,
-                    view: t.view,
-                    memory: t.memory,
-                    block_id: t.block_id,
-                    offset: t.offset,
-                    allocated_size: t.allocated_size,
-                    layout: std::sync::Mutex::new(t.current_layout()),
-                    width: t.width,
-                    height: t.height,
-                    mip_levels: t.mip_levels,
-                    sample_count: t.sample_count,
-                    format: t.format,
-                    owned: false,
-                }),
+            // Clones share the HAL image's layout lock so barriers always observe the layout this
+            // image is actually in, even when recorded through a different handle.
+            hal_texture: self.hal_texture.as_ref().map(|t| t.clone_unowned()),
             vulkan_device: Arc::clone(&self.vulkan_device),
             width: self.width,
             height: self.height,

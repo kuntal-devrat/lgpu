@@ -201,7 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     let window = Arc::new(
         WindowBuilder::new()
-            .with_title("lgpu Voxel Renderer — Real-Time DDA Engine")
+            .with_title("lgpu Voxel Renderer: Real-Time DDA Engine")
             .with_inner_size(LogicalSize::new(1280.0, 720.0))
             .build(&event_loop)?,
     );

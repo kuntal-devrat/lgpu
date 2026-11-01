@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub struct CommandEncoder {
     pub(crate) recorder: Option<lgpu_hal::vulkan::VulkanCommandRecorder>,
     pub(crate) vulkan_device: Arc<lgpu_hal::vulkan::VulkanDevice>,
+    /// Vertex buffers bound for the next draws, indexed by binding number.
+    pub(crate) vertex_buffers: Vec<Option<(lgpu_hal::vulkan::vk::Buffer, u64)>>,
 }
 
 pub struct CommandBuffer {
@@ -68,6 +70,40 @@ impl CommandEncoder {
                 "BindlessComputePipeline has been destroyed".to_string(),
             ))
         })
+    }
+
+    /// Binds a vertex buffer to a binding slot for every draw recorded afterwards.
+    /// The layout passed to the graphics pipeline describes the bindings this draws from.
+    pub fn bind_vertex_buffer(&mut self, binding: u32, buffer: &Buffer, offset: u64) {
+        let Some(hal_buffer) = buffer.hal_buffer.as_ref() else {
+            return;
+        };
+        let index = binding as usize;
+        if self.vertex_buffers.len() <= index {
+            self.vertex_buffers.resize(index + 1, None);
+        }
+        self.vertex_buffers[index] = Some((hal_buffer.buffer, offset));
+    }
+
+    /// Clears all vertex buffer bindings.
+    pub fn unbind_vertex_buffers(&mut self) {
+        self.vertex_buffers.clear();
+    }
+
+    fn vertex_bindings(&self) -> Result<Vec<(lgpu_hal::vulkan::vk::Buffer, u64)>, Error> {
+        let mut bindings = Vec::with_capacity(self.vertex_buffers.len());
+        for (binding, slot) in self.vertex_buffers.iter().enumerate() {
+            match slot {
+                Some(binding_value) => bindings.push(*binding_value),
+                None => {
+                    return Err(Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                        "Vertex buffer binding {binding} is not set, but binding {}",
+                        bindings.len()
+                    ))))
+                }
+            }
+        }
+        Ok(bindings)
     }
 
     pub fn dispatch_compute(
@@ -144,18 +180,14 @@ impl CommandEncoder {
         push_constants: &[u8],
         clear_color: [f32; 4],
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_tex = Self::get_tex(texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        self.vulkan_device.cmd_draw(
-            recorder,
-            raw_tex,
-            raw_pipeline,
+        self.draw_with_ops_resolve(
+            texture,
+            None,
+            pipeline,
             vertex_count,
             push_constants,
-            clear_color,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+        )
     }
 
     pub fn draw_with_ops(
@@ -166,20 +198,104 @@ impl CommandEncoder {
         push_constants: &[u8],
         color_load_op: lgpu_hal::ColorLoadOp,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_tex = Self::get_tex(texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        self.vulkan_device.cmd_draw_with_ops(
-            recorder,
-            raw_tex,
+        self.draw_with_ops_resolve(
+            texture,
             None,
-            raw_pipeline,
+            pipeline,
+            vertex_count,
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    /// Draws with an optional MSAA resolve target. When `resolve` is set, the color texture
+    /// must be multisampled and the resolve texture single sampled, with matching size and
+    /// format. The resolved image is left in `SHADER_READ_ONLY_OPTIMAL`.
+    pub fn draw_with_ops_resolve(
+        &mut self,
+        color_texture: &Texture,
+        resolve: Option<&Texture>,
+        pipeline: &GraphicsPipeline,
+        vertex_count: u32,
+        push_constants: &[u8],
+        color_load_op: lgpu_hal::ColorLoadOp,
+    ) -> Result<(), Error> {
+        self.draw_full(
+            color_texture,
+            resolve,
+            None,
+            pipeline,
             lgpu_hal::vulkan::DrawCommand::Array {
                 vertex_count,
                 instance_count: 1,
                 first_vertex: 0,
                 first_instance: 0,
             },
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    /// Draws with an optional depth attachment and MSAA resolve target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_with_depth_and_ops_resolve(
+        &mut self,
+        color_texture: &Texture,
+        resolve: Option<&Texture>,
+        depth_texture: &Texture,
+        pipeline: &GraphicsPipeline,
+        vertex_count: u32,
+        push_constants: &[u8],
+        color_load_op: lgpu_hal::ColorLoadOp,
+        depth_load_op: lgpu_hal::DepthLoadOp,
+    ) -> Result<(), Error> {
+        self.draw_full(
+            color_texture,
+            resolve,
+            Some((depth_texture, depth_load_op)),
+            pipeline,
+            lgpu_hal::vulkan::DrawCommand::Array {
+                vertex_count,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+            },
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_full(
+        &mut self,
+        color_texture: &Texture,
+        resolve: Option<&Texture>,
+        depth: Option<(&Texture, lgpu_hal::DepthLoadOp)>,
+        pipeline: &GraphicsPipeline,
+        draw_cmd: lgpu_hal::vulkan::DrawCommand<'_>,
+        push_constants: &[u8],
+        color_load_op: lgpu_hal::ColorLoadOp,
+    ) -> Result<(), Error> {
+        let recorder = self.rec()?;
+        let raw_color = Self::get_tex(color_texture)?;
+        let raw_resolve = match resolve {
+            Some(texture) => Some(Self::get_tex(texture)?),
+            None => None,
+        };
+        let raw_depth = match depth {
+            Some((texture, op)) => Some((Self::get_tex(texture)?, op)),
+            None => None,
+        };
+        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
+        let vertex_buffers = self.vertex_bindings()?;
+        self.vulkan_device.cmd_draw_with_ops_ex(
+            recorder,
+            raw_color,
+            raw_resolve,
+            raw_depth,
+            raw_pipeline,
+            draw_cmd,
+            &vertex_buffers,
             push_constants,
             color_load_op,
         )?;
@@ -216,21 +332,16 @@ impl CommandEncoder {
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_color = Self::get_tex(color_texture)?;
-        let raw_depth = Self::get_tex(depth_texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        self.vulkan_device.cmd_draw_with_depth(
-            recorder,
-            raw_color,
-            raw_depth,
-            raw_pipeline,
+        self.draw_with_depth_and_ops_resolve(
+            color_texture,
+            None,
+            depth_texture,
+            pipeline,
             vertex_count,
             push_constants,
-            clear_color,
-            clear_depth,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+            lgpu_hal::DepthLoadOp::Clear(clear_depth),
+        )
     }
 
     pub fn draw_mrt(
@@ -256,11 +367,13 @@ impl CommandEncoder {
             None => None,
         };
         let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
+        let vertex_buffers = self.vertex_bindings()?;
         self.vulkan_device.cmd_draw_mrt(
             recorder,
             &raw_colors,
             raw_depth,
             raw_pipeline,
+            &vertex_buffers,
             vertex_count,
             instance_count,
             first_vertex,
@@ -282,25 +395,16 @@ impl CommandEncoder {
         color_load_op: lgpu_hal::ColorLoadOp,
         depth_load_op: lgpu_hal::DepthLoadOp,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_color = Self::get_tex(color_texture)?;
-        let raw_depth = Self::get_tex(depth_texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        self.vulkan_device.cmd_draw_with_ops(
-            recorder,
-            raw_color,
-            Some((raw_depth, depth_load_op)),
-            raw_pipeline,
-            lgpu_hal::vulkan::DrawCommand::Array {
-                vertex_count,
-                instance_count: 1,
-                first_vertex: 0,
-                first_instance: 0,
-            },
+        self.draw_with_depth_and_ops_resolve(
+            color_texture,
+            None,
+            depth_texture,
+            pipeline,
+            vertex_count,
             push_constants,
             color_load_op,
-        )?;
-        Ok(())
+            depth_load_op,
+        )
     }
 
     pub fn render_triangle(
@@ -382,25 +486,20 @@ impl CommandEncoder {
         push_constants: &[u8],
         clear_color: [f32; 4],
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_tex = Self::get_tex(texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        let raw_idx_buf = Self::get_buf(index_buffer)?;
-        self.vulkan_device.cmd_draw_indexed(
-            recorder,
-            raw_tex,
-            raw_pipeline,
-            raw_idx_buf,
+        self.draw_indexed_with_ops_resolve(
+            texture,
+            None,
+            None,
+            pipeline,
+            index_buffer,
             index_count,
             instance_count,
             first_index,
             vertex_offset,
             first_instance,
-            lgpu_hal::vulkan::vk::IndexType::UINT32,
             push_constants,
-            clear_color,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+        )
     }
 
     pub fn draw_indexed_with_depth(
@@ -418,28 +517,20 @@ impl CommandEncoder {
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_color = Self::get_tex(color_texture)?;
-        let raw_depth = Self::get_tex(depth_texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        let raw_idx_buf = Self::get_buf(index_buffer)?;
-        self.vulkan_device.cmd_draw_indexed_with_depth(
-            recorder,
-            raw_color,
-            raw_depth,
-            raw_pipeline,
-            raw_idx_buf,
+        self.draw_indexed_with_ops_resolve(
+            color_texture,
+            None,
+            Some((depth_texture, lgpu_hal::DepthLoadOp::Clear(clear_depth))),
+            pipeline,
+            index_buffer,
             index_count,
             instance_count,
             first_index,
             vertex_offset,
             first_instance,
-            lgpu_hal::vulkan::vk::IndexType::UINT32,
             push_constants,
-            clear_color,
-            clear_depth,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+        )
     }
 
     pub fn draw_indexed_with_ops(
@@ -457,21 +548,51 @@ impl CommandEncoder {
         color_load_op: lgpu_hal::ColorLoadOp,
         depth_load_op: Option<lgpu_hal::DepthLoadOp>,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_color = Self::get_tex(color_texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        let raw_idx_buf = Self::get_buf(index_buffer)?;
         let depth_tuple = match (depth_texture, depth_load_op) {
-            (Some(dt), Some(op)) => Some((Self::get_tex(dt)?, op)),
+            (Some(dt), Some(op)) => Some((dt, op)),
             _ => None,
         };
-        self.vulkan_device.cmd_draw_with_ops(
-            recorder,
-            raw_color,
+        self.draw_indexed_with_ops_resolve(
+            color_texture,
+            None,
             depth_tuple,
-            raw_pipeline,
+            pipeline,
+            index_buffer,
+            index_count,
+            instance_count,
+            first_index,
+            vertex_offset,
+            first_instance,
+            push_constants,
+            color_load_op,
+        )
+    }
+
+    /// Indexed draw with optional depth attachment and MSAA resolve target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_indexed_with_ops_resolve(
+        &mut self,
+        color_texture: &Texture,
+        resolve: Option<&Texture>,
+        depth: Option<(&Texture, lgpu_hal::DepthLoadOp)>,
+        pipeline: &GraphicsPipeline,
+        index_buffer: &Buffer,
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        vertex_offset: i32,
+        first_instance: u32,
+        push_constants: &[u8],
+        color_load_op: lgpu_hal::ColorLoadOp,
+    ) -> Result<(), Error> {
+        let raw_index = Self::get_buf(index_buffer)?;
+        self.draw_full(
+            color_texture,
+            resolve,
+            depth,
+            pipeline,
             lgpu_hal::vulkan::DrawCommand::Indexed {
-                index_buffer: raw_idx_buf,
+                index_buffer: raw_index,
                 index_count,
                 instance_count,
                 first_index,
@@ -481,8 +602,7 @@ impl CommandEncoder {
             },
             push_constants,
             color_load_op,
-        )?;
-        Ok(())
+        )
     }
 
     pub fn draw_indirect(
@@ -496,22 +616,18 @@ impl CommandEncoder {
         push_constants: &[u8],
         clear_color: [f32; 4],
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_tex = Self::get_tex(texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        let raw_ind_buf = Self::get_buf(indirect_buffer)?;
-        self.vulkan_device.cmd_draw_indirect(
-            recorder,
-            raw_tex,
-            raw_pipeline,
-            raw_ind_buf,
+        self.draw_indirect_with_ops_resolve(
+            texture,
+            None,
+            None,
+            pipeline,
+            indirect_buffer,
             offset,
             draw_count,
             stride,
             push_constants,
-            clear_color,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+        )
     }
 
     pub fn draw_indirect_with_depth(
@@ -527,25 +643,50 @@ impl CommandEncoder {
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<(), Error> {
-        let recorder = self.rec()?;
-        let raw_color = Self::get_tex(color_texture)?;
-        let raw_depth = Self::get_tex(depth_texture)?;
-        let raw_pipeline = Self::get_gfx_pipe(pipeline)?;
-        let raw_ind_buf = Self::get_buf(indirect_buffer)?;
-        self.vulkan_device.cmd_draw_indirect_with_depth(
-            recorder,
-            raw_color,
-            raw_depth,
-            raw_pipeline,
-            raw_ind_buf,
+        self.draw_indirect_with_ops_resolve(
+            color_texture,
+            None,
+            Some((depth_texture, lgpu_hal::DepthLoadOp::Clear(clear_depth))),
+            pipeline,
+            indirect_buffer,
             offset,
             draw_count,
             stride,
             push_constants,
-            clear_color,
-            clear_depth,
-        )?;
-        Ok(())
+            lgpu_hal::ColorLoadOp::Clear(clear_color),
+        )
+    }
+
+    /// Indirect draw with optional depth attachment and MSAA resolve target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_indirect_with_ops_resolve(
+        &mut self,
+        color_texture: &Texture,
+        resolve: Option<&Texture>,
+        depth: Option<(&Texture, lgpu_hal::DepthLoadOp)>,
+        pipeline: &GraphicsPipeline,
+        indirect_buffer: &Buffer,
+        offset: u64,
+        draw_count: u32,
+        stride: u32,
+        push_constants: &[u8],
+        color_load_op: lgpu_hal::ColorLoadOp,
+    ) -> Result<(), Error> {
+        let raw_indirect = Self::get_buf(indirect_buffer)?;
+        self.draw_full(
+            color_texture,
+            resolve,
+            depth,
+            pipeline,
+            lgpu_hal::vulkan::DrawCommand::Indirect {
+                indirect_buffer: raw_indirect,
+                offset,
+                draw_count,
+                stride,
+            },
+            push_constants,
+            color_load_op,
+        )
     }
 
     pub fn copy_texture_to_buffer(&mut self, texture: &Texture, buffer: &Buffer) {
@@ -558,6 +699,49 @@ impl CommandEncoder {
         };
         self.vulkan_device
             .cmd_copy_image_to_buffer(recorder, raw_tex, raw_buf);
+    }
+
+    /// Resets every query in a timestamp pool. Call this before writing timestamps in a
+    /// command buffer that reuses the pool.
+    pub fn reset_timestamp_pool(&mut self, pool: &crate::TimestampPool) {
+        if let (Some(recorder), Ok(raw)) = (self.recorder.as_ref(), pool.raw()) {
+            self.vulkan_device
+                .cmd_reset_query_pool(recorder, raw, 0, pool.count);
+        }
+    }
+
+    /// Writes a GPU timestamp into `index` of `pool`.
+    pub fn write_timestamp(
+        &mut self,
+        pool: &crate::TimestampPool,
+        index: u32,
+    ) -> Result<(), Error> {
+        let recorder = self.rec()?;
+        let raw = pool.raw()?;
+        if index >= pool.count {
+            return Err(Error::Hal(lgpu_hal::HalError::InvalidParameter(format!(
+                "Timestamp index {index} is out of range for a pool of {}",
+                pool.count
+            ))));
+        }
+        self.vulkan_device.cmd_write_timestamp(recorder, raw, index);
+        Ok(())
+    }
+
+    /// Opens a named region in GPU debuggers such as RenderDoc. Has no effect when the
+    /// debug utils extension is unavailable.
+    pub fn begin_debug_label(&mut self, name: &str, color: [f32; 4]) {
+        if let Some(recorder) = self.recorder.as_ref() {
+            self.vulkan_device
+                .cmd_begin_debug_label(recorder, name, color);
+        }
+    }
+
+    /// Closes the region opened by [`CommandEncoder::begin_debug_label`].
+    pub fn end_debug_label(&mut self) {
+        if let Some(recorder) = self.recorder.as_ref() {
+            self.vulkan_device.cmd_end_debug_label(recorder);
+        }
     }
 
     pub fn memory_barrier(&mut self) {
@@ -626,9 +810,19 @@ impl CommandEncoder {
     /// # }
     /// ```
     pub fn begin_render_pass<'a>(&'a mut self, desc: RenderPassDesc<'a>) -> RenderPass<'a> {
+        self.begin_render_pass_with_resolve(desc, None)
+    }
+
+    /// Begins a scoped render pass with an optional MSAA resolve target.
+    pub fn begin_render_pass_with_resolve<'a>(
+        &'a mut self,
+        desc: RenderPassDesc<'a>,
+        resolve: Option<&'a Texture>,
+    ) -> RenderPass<'a> {
         RenderPass {
             encoder: self,
             desc,
+            resolve,
         }
     }
 }
@@ -650,6 +844,7 @@ pub struct RenderPassDesc<'a> {
 pub struct RenderPass<'a> {
     encoder: &'a mut CommandEncoder,
     desc: RenderPassDesc<'a>,
+    resolve: Option<&'a Texture>,
 }
 
 impl<'a> RenderPass<'a> {
@@ -660,8 +855,9 @@ impl<'a> RenderPass<'a> {
         push_constants: &[u8],
     ) -> Result<(), Error> {
         if let Some((depth_tex, depth_op)) = self.desc.depth_attachment {
-            self.encoder.draw_with_depth_and_ops(
+            self.encoder.draw_with_depth_and_ops_resolve(
                 self.desc.color_texture,
+                self.resolve,
                 depth_tex,
                 pipeline,
                 vertex_count,
@@ -670,8 +866,9 @@ impl<'a> RenderPass<'a> {
                 depth_op,
             )?;
         } else {
-            self.encoder.draw_with_ops(
+            self.encoder.draw_with_ops_resolve(
                 self.desc.color_texture,
+                self.resolve,
                 pipeline,
                 vertex_count,
                 push_constants,
@@ -701,9 +898,13 @@ impl<'a> RenderPass<'a> {
             Some((dt, dop)) => (Some(dt), Some(dop)),
             None => (None, None),
         };
-        self.encoder.draw_indexed_with_ops(
+        self.encoder.draw_indexed_with_ops_resolve(
             self.desc.color_texture,
-            depth_tex,
+            self.resolve,
+            match (depth_tex, depth_op) {
+                (Some(tex), Some(op)) => Some((tex, op)),
+                _ => None,
+            },
             pipeline,
             index_buffer,
             index_count,
@@ -713,7 +914,6 @@ impl<'a> RenderPass<'a> {
             first_instance,
             push_constants,
             self.desc.color_load_op,
-            depth_op,
         )?;
         self.desc.color_load_op = lgpu_hal::ColorLoadOp::Load;
         if let Some((d, _)) = self.desc.depth_attachment {

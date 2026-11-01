@@ -2,7 +2,7 @@
 
 use lgpu::{
     BufferDesc, BufferUsage, GraphicsPipelineDesc, Instance, MemoryLocation, TextureDesc,
-    TextureFormat, TextureUsage,
+    TextureDimension, TextureFormat, TextureUsage,
 };
 
 #[test]
@@ -26,6 +26,8 @@ fn test_bindless_storage_image_registration_and_slot_recycling() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -188,6 +190,8 @@ fn test_multiple_render_targets_mrt() {
         width: 64,
         height: 64,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,

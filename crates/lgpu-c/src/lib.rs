@@ -7,8 +7,9 @@ use std::ptr::{self, NonNull};
 use lgpu::{
     AddressMode, Backend, BindlessComputePipeline, BufferDesc, BufferUsage, DeviceType, FilterMode,
     GraphicsPipeline, Instance, MemoryLocation, Sampler, SamplerDesc, Texture, TextureDesc,
-    TextureFormat, TextureUsage,
+    TextureDimension, TextureFormat, TextureUsage,
 };
+use lgpu::{ColorLoadOp, CompareOp, DepthLoadOp};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -1026,6 +1027,9 @@ pub unsafe extern "C" fn lgpu_create_texture(
         5 => TextureFormat::Rgba16Float,
         6 => TextureFormat::Rgba32Float,
         7 => TextureFormat::Depth32Float,
+        8 => TextureFormat::Depth24Stencil8,
+        9 => TextureFormat::Depth32FloatStencil8,
+        10 => TextureFormat::Depth16Unorm,
         _ => return LgpuResult::ErrorGeneric,
     };
 
@@ -1034,6 +1038,8 @@ pub unsafe extern "C" fn lgpu_create_texture(
         width,
         height,
         depth: depth.max(1),
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: tex_format,
@@ -1118,6 +1124,8 @@ pub unsafe extern "C" fn lgpu_create_sampler(
         address_mode_u: to_addr(address_u),
         address_mode_v: to_addr(address_v),
         address_mode_w: to_addr(address_w),
+        compare_enable: false,
+        compare_op: lgpu::CompareOp::Always,
     };
 
     match dev.device.create_sampler(&desc) {
@@ -1206,11 +1214,17 @@ pub unsafe extern "C" fn lgpu_create_graphics_pipeline(
         5 => TextureFormat::Rgba16Float,
         6 => TextureFormat::Rgba32Float,
         7 => TextureFormat::Depth32Float,
+        8 => TextureFormat::Depth24Stencil8,
+        9 => TextureFormat::Depth32FloatStencil8,
+        10 => TextureFormat::Depth16Unorm,
         _ => return LgpuResult::ErrorGeneric,
     };
 
     let dep_fmt = match depth_format {
         7 => Some(TextureFormat::Depth32Float),
+        8 => Some(TextureFormat::Depth24Stencil8),
+        9 => Some(TextureFormat::Depth32FloatStencil8),
+        10 => Some(TextureFormat::Depth16Unorm),
         -1 => None,
         _ => return LgpuResult::ErrorGeneric,
     };
@@ -1710,6 +1724,9 @@ pub unsafe extern "C" fn lgpu_texture_get_format(texture: *mut LgpuTextureWrappe
         TextureFormat::Rgba16Float => 5,
         TextureFormat::Rgba32Float => 6,
         TextureFormat::Depth32Float => 7,
+        TextureFormat::Depth24Stencil8 => 8,
+        TextureFormat::Depth32FloatStencil8 => 9,
+        TextureFormat::Depth16Unorm => 10,
     }
 }
 
@@ -2168,6 +2185,9 @@ pub unsafe extern "C" fn lgpu_surface_configure(
         5 => TextureFormat::Rgba16Float,
         6 => TextureFormat::Rgba32Float,
         7 => TextureFormat::Depth32Float,
+        8 => TextureFormat::Depth24Stencil8,
+        9 => TextureFormat::Depth32FloatStencil8,
+        10 => TextureFormat::Depth16Unorm,
         _ => return LgpuResult::ErrorGeneric,
     };
     let rust_present_mode = match (*config).present_mode {
@@ -2290,5 +2310,646 @@ pub unsafe extern "C" fn lgpu_surface_texture_destroy(
 pub unsafe extern "C" fn lgpu_destroy_surface(surface: *mut LgpuSurfaceWrapper) {
     if !surface.is_null() {
         drop(Box::from_raw(surface));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extended surface: texture dimensions, vertex input, MSAA resolve, GPU
+// timestamps, staged uploads, debug labels and sampler comparison.
+// ---------------------------------------------------------------------------
+
+/// A reusable pool of GPU timestamp queries.
+pub struct LgpuTimestampPoolWrapper {
+    pool: lgpu::TimestampPool,
+}
+
+fn texture_format_from_i32(format: i32) -> Option<TextureFormat> {
+    Some(match format {
+        0 => TextureFormat::Rgba8Unorm,
+        1 => TextureFormat::Rgba8Srgb,
+        2 => TextureFormat::Bgra8Unorm,
+        3 => TextureFormat::Bgra8Srgb,
+        4 => TextureFormat::R32Float,
+        5 => TextureFormat::Rgba16Float,
+        6 => TextureFormat::Rgba32Float,
+        7 => TextureFormat::Depth32Float,
+        8 => TextureFormat::Depth24Stencil8,
+        9 => TextureFormat::Depth32FloatStencil8,
+        10 => TextureFormat::Depth16Unorm,
+        _ => return None,
+    })
+}
+
+fn texture_dimension_from_i32(dimension: i32) -> Option<TextureDimension> {
+    Some(match dimension {
+        0 => TextureDimension::D2,
+        1 => TextureDimension::D2Array,
+        2 => TextureDimension::D3,
+        3 => TextureDimension::Cube,
+        4 => TextureDimension::CubeArray,
+        5 => TextureDimension::D1,
+        _ => return None,
+    })
+}
+
+/// Creates a texture with explicit dimension, layer count, mip levels and sample count.
+///
+/// `dimension` is 0 = 2D, 1 = 2D array, 2 = 3D, 3 = cube, 4 = cube array, 5 = 1D.
+///
+/// # Safety
+///
+/// `device` must be a valid non-null pointer and `out_texture` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_texture_ex(
+    device: *mut LgpuDeviceWrapper,
+    width: u32,
+    height: u32,
+    depth: u32,
+    array_layers: u32,
+    dimension: i32,
+    mip_levels: u32,
+    sample_count: u32,
+    format: i32,
+    usage: u32,
+    out_texture: *mut *mut LgpuTextureWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_texture.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let (Some(tex_format), Some(tex_dimension)) = (
+        texture_format_from_i32(format),
+        texture_dimension_from_i32(dimension),
+    ) else {
+        return LgpuResult::ErrorGeneric;
+    };
+    let desc = TextureDesc {
+        label: Some("C_TextureEx"),
+        width,
+        height,
+        depth: depth.max(1),
+        array_layers: array_layers.max(1),
+        dimension: tex_dimension,
+        mip_levels: mip_levels.max(1),
+        sample_count: sample_count.max(1),
+        format: tex_format,
+        usage: TextureUsage::from_bits_truncate(usage),
+    };
+    match (*device).device.create_texture(&desc) {
+        Ok(texture) => {
+            *out_texture = Box::into_raw(Box::new(LgpuTextureWrapper { texture }));
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("create_texture_ex failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Binds a vertex buffer for all subsequent draws.
+///
+/// # Safety
+///
+/// `encoder` and `buffer` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_bind_vertex_buffer(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    binding: u32,
+    buffer: *mut LgpuBufferWrapper,
+    offset: u64,
+) {
+    if encoder.is_null() || buffer.is_null() {
+        return;
+    }
+    let buf = &*buffer;
+    if let Some(enc) = &mut (*encoder).encoder {
+        enc.bind_vertex_buffer(binding, &buf.buffer, offset);
+    }
+}
+
+/// Clears every vertex buffer binding recorded so far.
+///
+/// # Safety
+///
+/// `encoder` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_unbind_vertex_buffers(
+    encoder: *mut LgpuCommandEncoderWrapper,
+) {
+    if encoder.is_null() {
+        return;
+    }
+    if let Some(enc) = &mut (*encoder).encoder {
+        enc.unbind_vertex_buffers();
+    }
+}
+
+/// Returns the bindless uniform-buffer slot, or -1 when the buffer is not a uniform buffer.
+///
+/// # Safety
+///
+/// `buffer` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_buffer_get_uniform_id(buffer: *mut LgpuBufferWrapper) -> i32 {
+    if buffer.is_null() {
+        return -1;
+    }
+    match (*buffer).buffer.uniform_id() {
+        Some(id) => id.0 as i32,
+        None => -1,
+    }
+}
+
+/// Updates one bindless uniform-buffer descriptor slot.
+///
+/// # Safety
+///
+/// `device` and `buffer` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_write_uniform_buffer_descriptor(
+    device: *mut LgpuDeviceWrapper,
+    slot: u32,
+    buffer: *mut LgpuBufferWrapper,
+) -> LgpuResult {
+    if device.is_null() || buffer.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let buf = &*buffer;
+    match (*device)
+        .device
+        .write_uniform_buffer_descriptors_batch(&[(slot, &buf.buffer)])
+    {
+        Ok(()) => LgpuResult::Success,
+        Err(e) => {
+            set_last_error(format!("uniform descriptor write failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Draws with optional MSAA resolve and depth attachments.
+///
+/// `resolve` and `depth` may be null. When `depth` is non-null, `clear_depth` is the clear value.
+///
+/// # Safety
+///
+/// All non-null pointers must reference live resources; `clear_color` must point at four floats.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_draw_with_resolve(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    color_texture: *mut LgpuTextureWrapper,
+    resolve: *mut LgpuTextureWrapper,
+    depth: *mut LgpuTextureWrapper,
+    pipeline: *mut LgpuGraphicsPipelineWrapper,
+    vertex_count: u32,
+    push_constants: *const c_void,
+    push_constants_size: usize,
+    clear_color: *const f32,
+    clear_depth: f32,
+) -> LgpuResult {
+    if encoder.is_null() || color_texture.is_null() || pipeline.is_null() || clear_color.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let Some(enc) = &mut (*encoder).encoder else {
+        return LgpuResult::ErrorGeneric;
+    };
+    let col = &*color_texture;
+    let pip = &*pipeline;
+    let resolve_ref = (!resolve.is_null()).then(|| &(*resolve).texture);
+    let color_values = std::slice::from_raw_parts(clear_color, 4);
+    let color_op = ColorLoadOp::Clear([
+        color_values[0],
+        color_values[1],
+        color_values[2],
+        color_values[3],
+    ]);
+    let pc_slice = if !push_constants.is_null() && push_constants_size > 0 {
+        std::slice::from_raw_parts(push_constants as *const u8, push_constants_size)
+    } else {
+        &[]
+    };
+
+    let result = if depth.is_null() {
+        enc.draw_with_ops_resolve(
+            &col.texture,
+            resolve_ref,
+            &pip.pipeline,
+            vertex_count,
+            pc_slice,
+            color_op,
+        )
+    } else {
+        enc.draw_with_depth_and_ops_resolve(
+            &col.texture,
+            resolve_ref,
+            &(*depth).texture,
+            &pip.pipeline,
+            vertex_count,
+            pc_slice,
+            color_op,
+            DepthLoadOp::Clear(clear_depth),
+        )
+    };
+
+    match result {
+        Ok(()) => LgpuResult::Success,
+        Err(e) => {
+            set_last_error(format!("draw failed: {e}"));
+            LgpuResult::ErrorCommand
+        }
+    }
+}
+
+/// Creates a pool of `count` GPU timestamp queries.
+///
+/// # Safety
+///
+/// `device` must be valid and `out_pool` writable.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_timestamp_pool(
+    device: *mut LgpuDeviceWrapper,
+    count: u32,
+    out_pool: *mut *mut LgpuTimestampPoolWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_pool.is_null() || count == 0 {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*device).device.create_timestamp_pool(count) {
+        Ok(pool) => {
+            *out_pool = Box::into_raw(Box::new(LgpuTimestampPoolWrapper { pool }));
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("timestamp pool creation failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Destroys a timestamp pool.
+///
+/// # Safety
+///
+/// `pool` must be null or a pointer returned by `lgpu_create_timestamp_pool`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_destroy_timestamp_pool(pool: *mut LgpuTimestampPoolWrapper) {
+    if !pool.is_null() {
+        drop(Box::from_raw(pool));
+    }
+}
+
+/// Returns the number of queries in a timestamp pool.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_timestamp_pool_count(pool: *mut LgpuTimestampPoolWrapper) -> u32 {
+    if pool.is_null() {
+        return 0;
+    }
+    (*pool).pool.count()
+}
+
+/// Reads the pool's timestamps in nanoseconds, after the submission that wrote them completed.
+///
+/// # Safety
+///
+/// `out_values` must be writable for `capacity` `u64` values.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_timestamp_pool_read(
+    pool: *mut LgpuTimestampPoolWrapper,
+    out_values: *mut u64,
+    capacity: u32,
+) -> LgpuResult {
+    if pool.is_null() || out_values.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*pool).pool.read() {
+        Ok(values) => {
+            let count = (capacity as usize).min(values.len());
+            std::ptr::copy_nonoverlapping(values.as_ptr(), out_values, count);
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("timestamp read failed: {e}"));
+            LgpuResult::ErrorCommand
+        }
+    }
+}
+
+/// Resets every query in the pool before it is reused in a new command buffer.
+///
+/// # Safety
+///
+/// `encoder` and `pool` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_reset_timestamp_pool(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    pool: *mut LgpuTimestampPoolWrapper,
+) {
+    if encoder.is_null() || pool.is_null() {
+        return;
+    }
+    if let Some(enc) = &mut (*encoder).encoder {
+        enc.reset_timestamp_pool(&(*pool).pool);
+    }
+}
+
+/// Writes a GPU timestamp into `index` of the pool.
+///
+/// # Safety
+///
+/// `encoder` and `pool` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_write_timestamp(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    pool: *mut LgpuTimestampPoolWrapper,
+    index: u32,
+) -> LgpuResult {
+    if encoder.is_null() || pool.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let Some(enc) = &mut (*encoder).encoder else {
+        return LgpuResult::ErrorGeneric;
+    };
+    match enc.write_timestamp(&(*pool).pool, index) {
+        Ok(()) => LgpuResult::Success,
+        Err(e) => {
+            set_last_error(format!("timestamp write failed: {e}"));
+            LgpuResult::ErrorCommand
+        }
+    }
+}
+
+/// Uploads one mip level of a texture. `row_pitch` of 0 means tightly packed rows.
+///
+/// # Safety
+///
+/// `device` and `texture` must be valid pointers and `data` must be readable for `data_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_write_texture_mip(
+    device: *mut LgpuDeviceWrapper,
+    texture: *mut LgpuTextureWrapper,
+    mip_level: u32,
+    data: *const u8,
+    data_len: usize,
+    row_pitch: u32,
+) -> LgpuResult {
+    if device.is_null() || texture.is_null() || (data.is_null() && data_len > 0) {
+        return LgpuResult::ErrorGeneric;
+    }
+    let bytes = if data_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(data, data_len)
+    };
+    let pitch = (row_pitch > 0).then_some(row_pitch);
+    match (*device)
+        .device
+        .write_texture_mip(&(*texture).texture, mip_level, bytes, pitch)
+    {
+        Ok(()) => LgpuResult::Success,
+        Err(e) => {
+            set_last_error(format!("texture mip upload failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Generates the full mip chain with GPU blits.
+///
+/// # Safety
+///
+/// `device` and `texture` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_generate_mipmaps(
+    device: *mut LgpuDeviceWrapper,
+    texture: *mut LgpuTextureWrapper,
+) -> LgpuResult {
+    if device.is_null() || texture.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*device).device.generate_mipmaps(&(*texture).texture) {
+        Ok(()) => LgpuResult::Success,
+        Err(e) => {
+            set_last_error(format!("mipmap generation failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Creates a device-local buffer and uploads `data` through a staging copy.
+///
+/// # Safety
+///
+/// `device` must be valid, `data` readable for `data_len` bytes, and `out_buffer` writable.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_create_buffer_init_device_local(
+    device: *mut LgpuDeviceWrapper,
+    size: u64,
+    usage: u32,
+    data: *const u8,
+    data_len: usize,
+    out_buffer: *mut *mut LgpuBufferWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_buffer.is_null() || (data.is_null() && data_len > 0) {
+        return LgpuResult::ErrorGeneric;
+    }
+    let bytes = if data_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(data, data_len)
+    };
+    let desc = BufferDesc {
+        label: Some("C_DeviceLocalBuffer"),
+        size,
+        usage: BufferUsage::from_bits_truncate(usage),
+        memory_location: MemoryLocation::GpuOnly,
+    };
+    match (*device)
+        .device
+        .create_buffer_init_device_local(&desc, bytes)
+    {
+        Ok(buffer) => {
+            *out_buffer = Box::into_raw(Box::new(LgpuBufferWrapper { buffer }));
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("device-local upload failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Opens a named debug region visible in GPU debuggers.
+///
+/// # Safety
+///
+/// `encoder` and `name` must be non-null; `name` must be a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_begin_debug_label(
+    encoder: *mut LgpuCommandEncoderWrapper,
+    name: *const c_char,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+) {
+    if encoder.is_null() || name.is_null() {
+        return;
+    }
+    let Ok(label) = std::ffi::CStr::from_ptr(name).to_str() else {
+        return;
+    };
+    if let Some(enc) = &mut (*encoder).encoder {
+        enc.begin_debug_label(label, [r, g, b, a]);
+    }
+}
+
+/// Closes the region opened by `lgpu_encoder_begin_debug_label`.
+///
+/// # Safety
+///
+/// `encoder` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_encoder_end_debug_label(encoder: *mut LgpuCommandEncoderWrapper) {
+    if encoder.is_null() {
+        return;
+    }
+    if let Some(enc) = &mut (*encoder).encoder {
+        enc.end_debug_label();
+    }
+}
+
+/// Creates a sampler with optional depth comparison for shadow maps.
+///
+/// `compare_op` is 0 = never, 1 = less, 2 = equal, 3 = less-equal, 4 = greater,
+/// 5 = not-equal, 6 = greater-equal, 7 = always.
+///
+/// # Safety
+///
+/// `device` must be valid and `out_sampler` writable.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_sampler_ex(
+    device: *mut LgpuDeviceWrapper,
+    min_filter: i32,
+    mag_filter: i32,
+    mipmap_filter: i32,
+    address_u: i32,
+    address_v: i32,
+    address_w: i32,
+    compare_enable: bool,
+    compare_op: i32,
+    out_sampler: *mut *mut LgpuSamplerWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_sampler.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    let to_filter = |v| match v {
+        0 => FilterMode::Nearest,
+        _ => FilterMode::Linear,
+    };
+    let to_addr = |v| match v {
+        1 => AddressMode::Repeat,
+        2 => AddressMode::MirrorRepeat,
+        _ => AddressMode::ClampToEdge,
+    };
+    let op = match compare_op {
+        0 => CompareOp::Never,
+        1 => CompareOp::Less,
+        2 => CompareOp::Equal,
+        3 => CompareOp::LessOrEqual,
+        4 => CompareOp::Greater,
+        5 => CompareOp::NotEqual,
+        6 => CompareOp::GreaterOrEqual,
+        7 => CompareOp::Always,
+        _ => return LgpuResult::ErrorGeneric,
+    };
+    let desc = SamplerDesc {
+        label: Some("C_SamplerEx"),
+        min_filter: to_filter(min_filter),
+        mag_filter: to_filter(mag_filter),
+        mipmap_filter: to_filter(mipmap_filter),
+        address_mode_u: to_addr(address_u),
+        address_mode_v: to_addr(address_v),
+        address_mode_w: to_addr(address_w),
+        compare_enable,
+        compare_op: op,
+    };
+    match (*device).device.create_sampler(&desc) {
+        Ok(sampler) => {
+            *out_sampler = Box::into_raw(Box::new(LgpuSamplerWrapper { sampler }));
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("sampler creation failed: {e}"));
+            LgpuResult::ErrorGeneric
+        }
+    }
+}
+
+/// Whether the device exposes a queue family dedicated to asynchronous compute.
+///
+/// # Safety
+///
+/// `device` must be a valid pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_has_async_compute_queue(
+    device: *mut LgpuDeviceWrapper,
+) -> bool {
+    if device.is_null() {
+        return false;
+    }
+    (*device).device.has_async_compute_queue()
+}
+
+/// Returns a handle to the async compute queue.
+///
+/// # Safety
+///
+/// `device` must be valid and `out_queue` writable. The returned handle owns no resources beyond
+/// the device; destroy it with `lgpu_destroy_queue`.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_device_get_compute_queue(
+    device: *mut LgpuDeviceWrapper,
+    out_queue: *mut *mut LgpuQueueWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_queue.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*device).device.compute_queue() {
+        Some(queue) => {
+            *out_queue = Box::into_raw(Box::new(LgpuQueueWrapper { queue }));
+            LgpuResult::Success
+        }
+        None => LgpuResult::ErrorGeneric,
+    }
+}
+
+/// Creates an encoder whose command buffer targets the async compute queue family.
+///
+/// # Safety
+///
+/// `device` must be valid and `out_encoder` writable.
+#[no_mangle]
+pub unsafe extern "C" fn lgpu_create_compute_encoder(
+    device: *mut LgpuDeviceWrapper,
+    out_encoder: *mut *mut LgpuCommandEncoderWrapper,
+) -> LgpuResult {
+    if device.is_null() || out_encoder.is_null() {
+        return LgpuResult::ErrorGeneric;
+    }
+    match (*device).device.create_compute_command_encoder() {
+        Ok(encoder) => {
+            *out_encoder = Box::into_raw(Box::new(LgpuCommandEncoderWrapper {
+                encoder: Some(encoder),
+            }));
+            LgpuResult::Success
+        }
+        Err(e) => {
+            set_last_error(format!("compute encoder creation failed: {e}"));
+            LgpuResult::ErrorCommand
+        }
     }
 }

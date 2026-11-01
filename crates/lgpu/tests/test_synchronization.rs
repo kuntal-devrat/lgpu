@@ -5,7 +5,10 @@
 //! - Multi-threaded command recording and atomic batch submissions
 //! - GPU execution, memory, and buffer pipeline barriers
 
-use lgpu::{BufferDesc, BufferUsage, MemoryLocation, TextureDesc, TextureFormat, TextureUsage};
+use lgpu::{
+    BufferDesc, BufferUsage, MemoryLocation, TextureDesc, TextureDimension, TextureFormat,
+    TextureUsage,
+};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -86,6 +89,8 @@ fn test_timeline_semaphore_gpu_async_pipelining() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -167,6 +172,8 @@ fn test_multithreaded_batch_submission() {
                 width: 64,
                 height: 64,
                 depth: 1,
+                dimension: TextureDimension::D2,
+                array_layers: 1,
                 mip_levels: 1,
                 sample_count: 1,
                 format: TextureFormat::Rgba8Unorm,

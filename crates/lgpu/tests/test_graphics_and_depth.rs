@@ -5,7 +5,10 @@
 //! - Graphics pipeline creation with depth testing and depth writing
 //! - Rendering with color and depth attachments
 
-use lgpu::{AddressMode, FilterMode, SamplerDesc, TextureDesc, TextureFormat, TextureUsage};
+use lgpu::{
+    AddressMode, FilterMode, SamplerDesc, TextureDesc, TextureDimension, TextureFormat,
+    TextureUsage,
+};
 
 macro_rules! require_gpu {
     () => {
@@ -36,6 +39,8 @@ fn test_bindless_texture_slot_allocation_and_recycling() {
         width: 64,
         height: 64,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -84,6 +89,8 @@ fn test_bindless_sampler_creation_and_recycling() {
         address_mode_u: AddressMode::ClampToEdge,
         address_mode_v: AddressMode::ClampToEdge,
         address_mode_w: AddressMode::ClampToEdge,
+        compare_enable: false,
+        compare_op: lgpu::CompareOp::Always,
     };
 
     // 1. Allocate first sampler -> slot 0
@@ -105,6 +112,8 @@ fn test_bindless_sampler_creation_and_recycling() {
         address_mode_u: AddressMode::Repeat,
         address_mode_v: AddressMode::Repeat,
         address_mode_w: AddressMode::Repeat,
+        compare_enable: false,
+        compare_op: lgpu::CompareOp::Always,
     };
     let samp1 = device
         .create_sampler(&desc2)
@@ -141,6 +150,8 @@ fn test_dynamic_rendering_with_depth_attachment() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -156,6 +167,8 @@ fn test_dynamic_rendering_with_depth_attachment() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Depth32Float,
@@ -236,6 +249,8 @@ fn test_graphics_pipeline_with_depth_testing() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Rgba8Unorm,
@@ -250,6 +265,8 @@ fn test_graphics_pipeline_with_depth_testing() {
         width: 128,
         height: 128,
         depth: 1,
+        dimension: TextureDimension::D2,
+        array_layers: 1,
         mip_levels: 1,
         sample_count: 1,
         format: TextureFormat::Depth32Float,
