@@ -104,8 +104,10 @@ fn test_hal_vulkan_modular_exports() {
 #[test]
 fn test_hal_traits_abstraction() {
     // Verify HalBackend, HalInstance, HalAdapter, HalDevice traits work uniformly
-    let instance = <VulkanBackend as HalBackend>::Instance::new()
-        .expect("Failed to create instance via HalBackend");
+    let instance = match <VulkanBackend as HalBackend>::Instance::new() {
+        Ok(i) => i,
+        Err(_) => return, // Skip test if no Vulkan driver, same as other tests
+    };
     let adapters =
         HalInstance::enumerate_adapters(&instance).expect("HalInstance::enumerate_adapters");
     if adapters.is_empty() {
