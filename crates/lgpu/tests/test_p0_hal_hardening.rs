@@ -1,4 +1,4 @@
-//! Integration tests for P0 HAL hardening fixes:
+//! Regression tests for HAL fixes:
 //! 1. Depth16Unorm bytes_per_pixel == 2
 //! 2. 3D Volume texture write_texture and readback across all depth slices
 //! 3. 2D Array & Cube texture write_texture and multi-layer mipmap generation
@@ -52,7 +52,7 @@ fn test_volume_texture_queue_write_texture() {
     const H: u32 = 4;
     const D: u32 = 3;
     let texture = match device.create_texture(&TextureDesc {
-        label: Some("P0_Hardening_Volume"),
+        label: Some("test_volume"),
         width: W,
         height: H,
         depth: D,
@@ -126,7 +126,7 @@ fn test_array_and_cube_write_texture() {
     const LAYERS: u32 = 4;
     let array_tex = device
         .create_texture(&TextureDesc {
-            label: Some("P0_Hardening_Array"),
+            label: Some("test_array"),
             width: W,
             height: H,
             depth: 1,
@@ -153,7 +153,7 @@ fn test_array_and_cube_write_texture() {
     // Test Cube texture with mipmap generation
     let cube_tex = device
         .create_texture(&TextureDesc {
-            label: Some("P0_Hardening_Cube"),
+            label: Some("test_cube"),
             width: 8,
             height: 8,
             depth: 1,

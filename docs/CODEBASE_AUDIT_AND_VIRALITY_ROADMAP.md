@@ -6,7 +6,7 @@ This document presents a comprehensive, deep-dive architectural audit of the ent
 
 ## 1. Executive Summary & Codebase Health
 
-`lgpu` has evolved into a remarkably clean, bindless-first Vulkan 1.3 abstraction. The design philosophy—eschewing legacy `VkRenderPass`/`VkFramebuffer` boilerplate in favor of pure dynamic rendering (`VK_KHR_dynamic_rendering`), global bindless indexing (`VK_EXT_descriptor_indexing`), timeline semaphores, and persistent staging ring buffers—places it in an enviable sweet spot between raw `ash` (verbose, error-prone) and `wgpu` (heavyweight, sluggish compile times, multi-backend baggage).
+`lgpu` is a bindless-first Vulkan 1.3 abstraction using dynamic rendering (`VK_KHR_dynamic_rendering`), descriptor indexing (`VK_EXT_descriptor_indexing`), timeline semaphores, and persistent staging buffers without legacy `VkRenderPass`/`VkFramebuffer` boilerplate.
 
 ### Overall Assessment
 | Component | Status | Strengths | Areas for Improvement |
