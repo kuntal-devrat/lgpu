@@ -119,12 +119,12 @@ impl TextureFormat {
     /// Size in bytes of a single texel of this format.
     pub fn bytes_per_pixel(&self) -> u32 {
         match self {
+            TextureFormat::Depth16Unorm => 2,
             TextureFormat::Rgba8Unorm
             | TextureFormat::Rgba8Srgb
             | TextureFormat::Bgra8Unorm
             | TextureFormat::Bgra8Srgb
             | TextureFormat::R32Float
-            | TextureFormat::Depth16Unorm
             | TextureFormat::Depth24Stencil8
             | TextureFormat::Depth32Float => 4,
             TextureFormat::Rgba16Float | TextureFormat::Depth32FloatStencil8 => 8,

@@ -46,6 +46,9 @@ pub trait HalDevice: Send + Sync + 'static {
     fn register_bindless_buffer(&self, buffer: &Self::Buffer) -> Result<u32, HalError>;
     fn unregister_bindless_buffer(&self, slot: u32);
 
+    fn register_bindless_uniform_buffer(&self, buffer: &Self::Buffer) -> Result<u32, HalError>;
+    fn unregister_bindless_uniform_buffer(&self, slot: u32);
+
     fn register_bindless_texture(&self, texture: &Self::Texture) -> Result<u32, HalError>;
     fn unregister_bindless_texture(&self, slot: u32);
 
@@ -152,6 +155,14 @@ impl HalDevice for crate::vulkan::VulkanDevice {
 
     fn unregister_bindless_buffer(&self, slot: u32) {
         self.unregister_bindless_buffer(slot)
+    }
+
+    fn register_bindless_uniform_buffer(&self, buffer: &Self::Buffer) -> Result<u32, HalError> {
+        self.register_bindless_uniform_buffer(buffer)
+    }
+
+    fn unregister_bindless_uniform_buffer(&self, slot: u32) {
+        self.unregister_bindless_uniform_buffer(slot)
     }
 
     fn register_bindless_texture(&self, texture: &Self::Texture) -> Result<u32, HalError> {
