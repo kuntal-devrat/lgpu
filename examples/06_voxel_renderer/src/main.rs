@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use lgpu::{
-    Device, GraphicsPipeline, Instance, PresentMode, Queue, Surface, SurfaceConfiguration,
-    TextureFormat, TextureUsage,
+    Buffer, BufferDesc, BufferUsage, Device, GraphicsPipeline, Instance, MemoryLocation,
+    PresentMode, Queue, Surface, SurfaceConfiguration, TextureFormat, TextureUsage,
 };
 use winit::{
     dpi::LogicalSize,
@@ -22,6 +22,189 @@ use winit::{
 };
 
 const VOXEL_SHADER_SRC: &str = include_str!("../shaders/voxel.wgsl");
+
+pub const WORLD_W: usize = 64;
+pub const WORLD_H: usize = 64;
+pub const WORLD_D: usize = 64;
+pub const VOXEL_COUNT: usize = WORLD_W * WORLD_H * WORLD_D;
+
+pub const VOXEL_AIR: u32 = 0;
+pub const VOXEL_GRASS: u32 = 1;
+pub const VOXEL_DIRT: u32 = 2;
+pub const VOXEL_STONE: u32 = 3;
+pub const VOXEL_SAND: u32 = 4;
+pub const VOXEL_WATER: u32 = 5;
+pub const VOXEL_WOOD: u32 = 6;
+pub const VOXEL_LEAVES: u32 = 7;
+pub const VOXEL_GOLD: u32 = 8;
+pub const VOXEL_BRICK: u32 = 9;
+
+#[derive(Clone, Copy, Debug)]
+pub struct RaycastHit {
+    pub pos: [i32; 3],
+    pub normal: [i32; 3],
+    pub voxel_type: u32,
+}
+
+pub fn voxel_coord_to_idx(x: i32, y: i32, z: i32) -> Option<usize> {
+    if (-32..32).contains(&x) && (0..64).contains(&y) && (-32..32).contains(&z) {
+        let gx = (x + 32) as usize;
+        let gy = y as usize;
+        let gz = (z + 32) as usize;
+        Some(gx + gz * 64 + gy * 4096)
+    } else {
+        None
+    }
+}
+
+pub fn generate_initial_world() -> Vec<u32> {
+    let mut voxels = vec![VOXEL_AIR; VOXEL_COUNT];
+    for gz in 0..WORLD_D {
+        let z = gz as i32 - 32;
+        for gx in 0..WORLD_W {
+            let x = gx as i32 - 32;
+            let fx = x as f32 * 0.08;
+            let fz = z as f32 * 0.08;
+            let h = ((fx.sin() * 0.5 + 0.5) * (fz.cos() * 0.5 + 0.5) * 16.0 + 12.0) as i32;
+
+            for y in 0..64 {
+                let idx = gx + gz * 64 + (y as usize) * 4096;
+                if y <= 12 && y > h {
+                    voxels[idx] = VOXEL_WATER;
+                } else if y < h - 3 {
+                    if y < 6 && (x * 37 + z * 17 + y * 13).abs() % 19 == 0 {
+                        voxels[idx] = VOXEL_GOLD;
+                    } else {
+                        voxels[idx] = VOXEL_STONE;
+                    }
+                } else if y < h {
+                    if h <= 14 {
+                        voxels[idx] = VOXEL_SAND;
+                    } else {
+                        voxels[idx] = VOXEL_DIRT;
+                    }
+                } else if y == h {
+                    if h <= 14 {
+                        voxels[idx] = VOXEL_SAND;
+                    } else {
+                        voxels[idx] = VOXEL_GRASS;
+                    }
+                }
+            }
+
+            // Castle fortress in the center (x: -6..=6, z: -6..=6)
+            if (-6..=6).contains(&x) && (-6..=6).contains(&z) {
+                let is_wall = x.abs() == 6 || z.abs() == 6;
+                let is_door = (x.abs() <= 1 && z == -6) || (x.abs() <= 1 && z == 6);
+                for y in 14..=26 {
+                    let idx = gx + gz * 64 + (y as usize) * 4096;
+                    if is_wall {
+                        if is_door && y <= 18 {
+                            voxels[idx] = VOXEL_AIR;
+                        } else if y == 26 && (x + z).abs() % 2 == 1 {
+                            // Battlements / crenellations
+                            voxels[idx] = VOXEL_AIR;
+                        } else {
+                            voxels[idx] = VOXEL_BRICK;
+                        }
+                    } else if y == 14 {
+                        voxels[idx] = VOXEL_STONE;
+                    }
+                }
+            }
+        }
+    }
+    voxels
+}
+
+pub fn raycast_voxel(
+    origin: [f32; 3],
+    dir: [f32; 3],
+    max_dist: f32,
+    voxels: &[u32],
+) -> Option<RaycastHit> {
+    let mut p = [
+        origin[0].floor() as i32,
+        origin[1].floor() as i32,
+        origin[2].floor() as i32,
+    ];
+    let step_x = if dir[0] > 0.0 { 1 } else { -1 };
+    let step_y = if dir[1] > 0.0 { 1 } else { -1 };
+    let step_z = if dir[2] > 0.0 { 1 } else { -1 };
+
+    let delta_x = if dir[0].abs() > 1e-6 {
+        (1.0 / dir[0]).abs()
+    } else {
+        1e6
+    };
+    let delta_y = if dir[1].abs() > 1e-6 {
+        (1.0 / dir[1]).abs()
+    } else {
+        1e6
+    };
+    let delta_z = if dir[2].abs() > 1e-6 {
+        (1.0 / dir[2]).abs()
+    } else {
+        1e6
+    };
+
+    let mut side_x = if dir[0] > 0.0 {
+        (p[0] as f32 + 1.0 - origin[0]) * delta_x
+    } else {
+        (origin[0] - p[0] as f32) * delta_x
+    };
+    let mut side_y = if dir[1] > 0.0 {
+        (p[1] as f32 + 1.0 - origin[1]) * delta_y
+    } else {
+        (origin[1] - p[1] as f32) * delta_y
+    };
+    let mut side_z = if dir[2] > 0.0 {
+        (p[2] as f32 + 1.0 - origin[2]) * delta_z
+    } else {
+        (origin[2] - p[2] as f32) * delta_z
+    };
+
+    let mut last_normal = [0, 0, 0];
+    let mut dist = 0.0;
+
+    while dist < max_dist {
+        if let Some(idx) = voxel_coord_to_idx(p[0], p[1], p[2]) {
+            let v = voxels[idx];
+            if v != VOXEL_AIR && v != VOXEL_WATER {
+                return Some(RaycastHit {
+                    pos: p,
+                    normal: last_normal,
+                    voxel_type: v,
+                });
+            }
+        }
+
+        if side_x < side_y {
+            if side_x < side_z {
+                dist = side_x;
+                side_x += delta_x;
+                p[0] += step_x;
+                last_normal = [-step_x, 0, 0];
+            } else {
+                dist = side_z;
+                side_z += delta_z;
+                p[2] += step_z;
+                last_normal = [0, 0, -step_z];
+            }
+        } else if side_y < side_z {
+            dist = side_y;
+            side_y += delta_y;
+            p[1] += step_y;
+            last_normal = [0, -step_y, 0];
+        } else {
+            dist = side_z;
+            side_z += delta_z;
+            p[2] += step_z;
+            last_normal = [0, 0, -step_z];
+        }
+    }
+    None
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -79,6 +262,7 @@ struct VoxelRenderer {
     queue: Queue,
     surface: Surface,
     pipeline: GraphicsPipeline,
+    voxel_buffer: Buffer,
     width: u32,
     height: u32,
 }
@@ -90,6 +274,7 @@ impl VoxelRenderer {
         mut surface: Surface,
         width: u32,
         height: u32,
+        initial_voxels: &[u32],
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let config = SurfaceConfiguration {
             usage: TextureUsage::RENDER_ATTACHMENT,
@@ -100,7 +285,17 @@ impl VoxelRenderer {
         };
         surface.configure(&device, &config)?;
 
-        // Compile WGSL to SPIR-V in ~2 milliseconds using Naga
+        let voxel_buffer = device.create_buffer_init(
+            &BufferDesc {
+                label: Some("voxel_storage_buffer"),
+                size: (VOXEL_COUNT * std::mem::size_of::<u32>()) as u64,
+                usage: BufferUsage::STORAGE | BufferUsage::TRANSFER_DST,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+            bytemuck::cast_slice(initial_voxels),
+        )?;
+
+        // Compile WGSL to SPIR-V using Naga
         let spv_words = compiler::compile_wgsl_to_spirv(VOXEL_SHADER_SRC)
             .map_err(|e| format!("Failed to compile voxel WGSL: {e}"))?;
 
@@ -117,9 +312,19 @@ impl VoxelRenderer {
             queue,
             surface,
             pipeline,
+            voxel_buffer,
             width,
             height,
         })
+    }
+
+    fn update_voxel(&self, idx: usize, val: u32) -> Result<(), Box<dyn std::error::Error>> {
+        self.queue.write_buffer(
+            &self.voxel_buffer,
+            (idx * std::mem::size_of::<u32>()) as u64,
+            bytemuck::bytes_of(&val),
+        )?;
+        Ok(())
     }
 
     fn resize(
@@ -191,7 +396,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  [Shift]            Sprint (2.5x speed boost)");
     println!("  [Mouse Drag]       Smooth look around (yaw / pitch)");
     println!("  [Arrow Keys]       Look around alternative");
-    println!("  [1, 2, 3]          Switch Voxel Worlds (Highlands, Islands, Citadel)");
+    println!("  [E / Right Click]  Mine Targeted Voxel (Destructible Sandbox)");
+    println!("  [Q / Middle Click] Place Selected Block");
+    println!("  [5, 6, 7, 8, 9]    Select Block (Stone, Brick, Gold, Wood, Leaves)");
+    println!("  [1, 2, 3]          Procedural Worlds (Highlands, Islands, Citadel)");
+    println!("  [4]                Interactive Sandbox World (GPU Storage Buffer)");
     println!("  [Tab]              Cycle Render Modes (Beauty, AO, Normals, Depth, IDs)");
     println!("  [T]                Toggle Day/Night Cycle Animation");
     println!("  [R]                Reset Camera");
@@ -224,10 +433,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let surface = instance.create_surface(&window)?;
 
     let size = window.inner_size();
-    let mut renderer = VoxelRenderer::new(device, queue, surface, size.width, size.height)?;
+    let mut cpu_voxels = generate_initial_world();
+    let mut renderer =
+        VoxelRenderer::new(device, queue, surface, size.width, size.height, &cpu_voxels)?;
 
-    let mut camera = Camera::new([0.0, 24.0, -18.0], 90.0, -12.0);
-    let mut world_mode: u32 = 0;
+    let mut camera = Camera::new([0.0, 20.0, -18.0], 90.0, -12.0);
+    let mut world_mode: u32 = 3; // Start in interactive sandbox mode
+    let mut selected_block: u32 = VOXEL_STONE;
     let mut render_mode: u32 = 0;
     let mut animate_sun = true;
     let mut sun_angle: f32 = 55.0;
@@ -306,12 +518,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     camera.pos = [0.0, 18.0, -32.0];
                                     println!("World -> Ancient Voxel Citadel & Ruins");
                                 }
+                                "4" => {
+                                    world_mode = 3;
+                                    camera.pos = [0.0, 20.0, -18.0];
+                                    camera.yaw = 90.0;
+                                    camera.pitch = -12.0;
+                                    println!("World -> Interactive Destructible Sandbox (GPU Storage Buffer)");
+                                }
+                                "5" => {
+                                    selected_block = VOXEL_STONE;
+                                    println!("Selected Place Block -> Stone (3)");
+                                }
+                                "6" => {
+                                    selected_block = VOXEL_BRICK;
+                                    println!("Selected Place Block -> Brick (9)");
+                                }
+                                "7" => {
+                                    selected_block = VOXEL_GOLD;
+                                    println!("Selected Place Block -> Gold (8)");
+                                }
+                                "8" => {
+                                    selected_block = VOXEL_WOOD;
+                                    println!("Selected Place Block -> Wood (6)");
+                                }
+                                "9" => {
+                                    selected_block = VOXEL_LEAVES;
+                                    println!("Selected Place Block -> Leaves (7)");
+                                }
+                                "e" | "E" => {
+                                    if world_mode == 3 {
+                                        if let Some(hit) = raycast_voxel(
+                                            camera.pos,
+                                            camera.forward_vector(),
+                                            16.0,
+                                            &cpu_voxels,
+                                        ) {
+                                            if let Some(idx) = voxel_coord_to_idx(
+                                                hit.pos[0], hit.pos[1], hit.pos[2],
+                                            ) {
+                                                cpu_voxels[idx] = VOXEL_AIR;
+                                                let _ = renderer.update_voxel(idx, VOXEL_AIR);
+                                                println!(
+                                                    "Mined voxel at {:?} (type {})",
+                                                    hit.pos, hit.voxel_type
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                "q" | "Q" => {
+                                    if world_mode == 3 {
+                                        if let Some(hit) = raycast_voxel(
+                                            camera.pos,
+                                            camera.forward_vector(),
+                                            16.0,
+                                            &cpu_voxels,
+                                        ) {
+                                            let place_pos = [
+                                                hit.pos[0] + hit.normal[0],
+                                                hit.pos[1] + hit.normal[1],
+                                                hit.pos[2] + hit.normal[2],
+                                            ];
+                                            if let Some(idx) = voxel_coord_to_idx(
+                                                place_pos[0],
+                                                place_pos[1],
+                                                place_pos[2],
+                                            ) {
+                                                cpu_voxels[idx] = selected_block;
+                                                let _ = renderer
+                                                    .update_voxel(idx, selected_block);
+                                                println!(
+                                                    "Placed block {} at {:?}",
+                                                    selected_block, place_pos
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 "t" | "T" => {
                                     animate_sun = !animate_sun;
                                     println!("Sun Animation -> {}", if animate_sun { "ON" } else { "PAUSED" });
                                 }
                                 "r" | "R" => {
-                                    camera.pos = [0.0, 24.0, -18.0];
+                                    camera.pos = [0.0, 20.0, -18.0];
                                     camera.yaw = 90.0;
                                     camera.pitch = -12.0;
                                     println!("Camera reset");
@@ -326,7 +615,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if button == MouseButton::Left {
                         mouse_dragging = state == ElementState::Pressed;
                         if mouse_dragging {
-                            last_mouse_pos = None; // Reset to avoid cursor snap jumps
+                            last_mouse_pos = None;
+                        }
+                    } else if button == MouseButton::Right
+                        && state == ElementState::Pressed
+                        && world_mode == 3
+                    {
+                        if let Some(hit) = raycast_voxel(
+                            camera.pos,
+                            camera.forward_vector(),
+                            16.0,
+                            &cpu_voxels,
+                        ) {
+                            if let Some(idx) =
+                                voxel_coord_to_idx(hit.pos[0], hit.pos[1], hit.pos[2])
+                            {
+                                cpu_voxels[idx] = VOXEL_AIR;
+                                let _ = renderer.update_voxel(idx, VOXEL_AIR);
+                                println!(
+                                    "Mined voxel at {:?} (type {})",
+                                    hit.pos, hit.voxel_type
+                                );
+                            }
+                        }
+                    } else if button == MouseButton::Middle
+                        && state == ElementState::Pressed
+                        && world_mode == 3
+                    {
+                        if let Some(hit) = raycast_voxel(
+                            camera.pos,
+                            camera.forward_vector(),
+                            16.0,
+                            &cpu_voxels,
+                        ) {
+                            let place_pos = [
+                                hit.pos[0] + hit.normal[0],
+                                hit.pos[1] + hit.normal[1],
+                                hit.pos[2] + hit.normal[2],
+                            ];
+                            if let Some(idx) = voxel_coord_to_idx(
+                                place_pos[0],
+                                place_pos[1],
+                                place_pos[2],
+                            ) {
+                                cpu_voxels[idx] = selected_block;
+                                let _ = renderer.update_voxel(idx, selected_block);
+                                println!(
+                                    "Placed block {} at {:?}",
+                                    selected_block, place_pos
+                                );
+                            }
                         }
                     }
                 }
@@ -436,7 +774,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match world_mode {
                                 0 => "Highlands",
                                 1 => "Islands",
-                                _ => "Citadel",
+                                2 => "Citadel",
+                                _ => "Sandbox (Interactive)",
                             },
                             camera.pos[0],
                             camera.pos[1],
@@ -457,4 +796,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxel_coord_indexing() {
+        assert_eq!(voxel_coord_to_idx(-32, 0, -32), Some(0));
+        assert_eq!(voxel_coord_to_idx(31, 63, 31), Some(VOXEL_COUNT - 1));
+        assert_eq!(voxel_coord_to_idx(-33, 0, 0), None);
+        assert_eq!(voxel_coord_to_idx(0, 64, 0), None);
+    }
+
+    #[test]
+    fn test_world_generation_and_raycasting() {
+        let voxels = generate_initial_world();
+        assert_eq!(voxels.len(), VOXEL_COUNT);
+
+        // Raycast straight down from sky should hit terrain
+        let hit = raycast_voxel([0.0, 50.0, 0.0], [0.0, -1.0, 0.0], 60.0, &voxels);
+        assert!(hit.is_some(), "Raycast down must hit ground or castle");
+        let h = hit.unwrap();
+        assert_eq!(h.normal, [0, 1, 0]);
+        assert_ne!(h.voxel_type, VOXEL_AIR);
+    }
 }
