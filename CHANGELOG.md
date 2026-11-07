@@ -4,6 +4,22 @@ All notable changes to the `lgpu` workspace are recorded in this file. The forma
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-11-07
+
+### Added
+- Example `09_greedy_mesher`: 3D voxel chunk greedy mesher comparing naive 6-face meshing against binary slice greedy meshing with quad merging (>85% to >94% polygon reduction), dynamic rendering, depth testing, and indexed draws via `SurfaceFrames`.
+- Real-time voxel world storage buffer mode in `06_voxel_renderer` with interactive DDA raycasting for block mining (`[E]` / Right Mouse Button) and placement (`[Q]` / Middle Mouse Button).
+- `register_bindless_uniform_buffer` and `unregister_bindless_uniform_buffer` methods added to the `HalDevice` trait.
+- Integration tests in `test_p0_hal_hardening` covering multi-queue command recycling, multi-layer image transitions, suballocation failure cleanup, and uniform descriptor recycling.
+
+### Fixed
+- Queue command recorder caches are separated per queue family (`graphics_recorder_cache` and `compute_recorder_cache`), preventing command pool contamination and reset issues on multi-queue devices.
+- `compute_recorder_cache` pools and command buffers are properly drained and freed on `trim_memory` and device drop.
+- Vulkan device memory is freed if suballocation memory block creation fails during fresh block allocation.
+- `Depth16Unorm` format size corrected from 4 bytes per pixel to 2 bytes per pixel.
+- Multi-layer 2D-array, cubemap, and 3D textures now use correct `base_array_layer` and `layer_count` in barrier transitions and copy descriptors.
+- Mipmap generation loop enforces level-to-level pipeline barriers between source read and destination write to prevent Read-After-Write hazards.
+
 ## [0.1.6] - 2026-11-01
 
 ### Added

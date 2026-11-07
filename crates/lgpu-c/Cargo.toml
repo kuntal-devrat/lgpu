@@ -13,5 +13,5 @@ description = "Universal C99 / Zig FFI bindings for lgpu"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-lgpu = { path = "../lgpu", version = "0.1.6" }
+lgpu = { path = "../lgpu", version = "0.1.7" }
 raw-window-handle = { workspace = true }
