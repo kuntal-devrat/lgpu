@@ -289,9 +289,20 @@ impl VulkanSuballocator {
             is_coherent,
         );
 
-        let offset = block.allocate(size, alignment).ok_or_else(|| {
-            HalError::OutOfMemory("Failed to suballocate from fresh memory block".to_string())
-        })?;
+        let offset = match block.allocate(size, alignment) {
+            Some(offset) => offset,
+            None => {
+                unsafe {
+                    if block.mapped_base.is_some() {
+                        device.unmap_memory(memory);
+                    }
+                    device.free_memory(memory, None);
+                }
+                return Err(HalError::OutOfMemory(
+                    "Failed to suballocate from fresh memory block".to_string(),
+                ));
+            }
+        };
 
         let mapped_ptr = block
             .mapped_base

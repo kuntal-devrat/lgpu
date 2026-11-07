@@ -42,6 +42,17 @@ impl VulkanDevice {
         }
     }
 
+    pub(crate) fn recorder_cache_for(
+        &self,
+        family: u32,
+    ) -> &std::sync::Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>> {
+        if family == self.queue_family_index {
+            &self.command_recorder_cache
+        } else {
+            &self.compute_recorder_cache
+        }
+    }
+
     pub(crate) fn find_memory_type(
         &self,
         type_filter: u32,
@@ -96,10 +107,6 @@ impl VulkanDevice {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        let mut cache = match self.command_recorder_cache.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
         for (_, recorders) in pending.drain(..) {
             for r in recorders {
                 unsafe {
@@ -110,6 +117,11 @@ impl VulkanDevice {
                         )
                         .ok();
                 }
+                let cache_mutex = self.recorder_cache_for(r.queue_family_index);
+                let mut cache = match cache_mutex.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
                 if cache.len() < 32 {
                     cache.push((r.command_pool, r.command_buffer));
                 } else {
@@ -219,6 +231,16 @@ impl VulkanDevice {
             }
             freed += 1;
         }
+        let mut compute_cache = match self.compute_recorder_cache.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        for (pool, _) in compute_cache.drain(..) {
+            unsafe {
+                self.device.destroy_command_pool(pool, None);
+            }
+            freed += 1;
+        }
         freed
     }
 
@@ -254,6 +276,14 @@ impl Drop for VulkanDevice {
                 Err(p) => p.into_inner(),
             };
             for (pool, _) in command_cache.drain(..) {
+                self.device.destroy_command_pool(pool, None);
+            }
+
+            let mut compute_cache = match self.compute_recorder_cache.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for (pool, _) in compute_cache.drain(..) {
                 self.device.destroy_command_pool(pool, None);
             }
 

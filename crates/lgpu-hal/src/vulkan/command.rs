@@ -64,17 +64,6 @@ impl VulkanDevice {
         self.create_recorder_on(family)
     }
 
-    fn recorder_cache_for(
-        &self,
-        family: u32,
-    ) -> &std::sync::Mutex<Vec<(vk::CommandPool, vk::CommandBuffer)>> {
-        if family == self.queue_family_index {
-            &self.command_recorder_cache
-        } else {
-            &self.compute_recorder_cache
-        }
-    }
-
     fn create_recorder_on(&self, family: u32) -> Result<VulkanCommandRecorder, HalError> {
         // Harvest any completed async command recorders back into cache
         {
@@ -87,13 +76,14 @@ impl VulkanDevice {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            let mut cache = match self.recorder_cache_for(family).lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
             pending.retain_mut(|(val, recorders)| {
                 if *val <= current_val {
                     for r in recorders.drain(..) {
+                        let cache_mutex = self.recorder_cache_for(r.queue_family_index);
+                        let mut cache = match cache_mutex.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
                         if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
                             cache.push((r.command_pool, r.command_buffer));
                         } else {
@@ -125,6 +115,11 @@ impl VulkanDevice {
                                     )
                                     .ok();
                             }
+                            let cache_mutex = self.recorder_cache_for(r.queue_family_index);
+                            let mut cache = match cache_mutex.lock() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
                             if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
                                 cache.push((r.command_pool, r.command_buffer));
                             } else {
@@ -1646,11 +1641,11 @@ impl VulkanDevice {
 
             if old_layout != vk::ImageLayout::TRANSFER_DST_OPTIMAL {
                 let subresource_range = vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .aspect_mask(Self::image_aspect(texture))
                     .base_mip_level(0)
                     .level_count(texture.mip_levels.max(1))
                     .base_array_layer(0)
-                    .layer_count(1);
+                    .layer_count(Self::copy_layer_count(texture));
 
                 let (src_stage2, src_access2) = match old_layout {
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
@@ -1771,11 +1766,11 @@ impl VulkanDevice {
 
                 unsafe {
                     let subresource_range = vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .aspect_mask(Self::image_aspect(texture))
                         .base_mip_level(0)
                         .level_count(texture.mip_levels.max(1))
                         .base_array_layer(0)
-                        .layer_count(1);
+                        .layer_count(Self::copy_layer_count(texture));
 
                     let old_layout = texture.current_layout();
                     let (src_stage2, src_access2) = match old_layout {
@@ -1813,10 +1808,10 @@ impl VulkanDevice {
                         .cmd_pipeline_barrier2(recorder.command_buffer, &pre_dep);
 
                     let subresource_layers = vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .aspect_mask(Self::image_aspect(texture))
                         .mip_level(0)
                         .base_array_layer(0)
-                        .layer_count(1);
+                        .layer_count(Self::copy_layer_count(texture));
 
                     let copy_region = vk::BufferImageCopy::default()
                         .buffer_offset(offset)
@@ -1827,7 +1822,7 @@ impl VulkanDevice {
                         .image_extent(vk::Extent3D {
                             width: texture.width,
                             height: texture.height,
-                            depth: 1,
+                            depth: texture.depth.max(1),
                         });
 
                     self.device.cmd_copy_buffer_to_image(
@@ -1922,11 +1917,11 @@ impl VulkanDevice {
 
         unsafe {
             let subresource_range = vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .aspect_mask(Self::image_aspect(texture))
                 .base_mip_level(0)
                 .level_count(texture.mip_levels.max(1))
                 .base_array_layer(0)
-                .layer_count(1);
+                .layer_count(Self::copy_layer_count(texture));
 
             let barrier_to_read = vk::ImageMemoryBarrier2::default()
                 .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
@@ -1994,7 +1989,7 @@ impl VulkanDevice {
             .base_mip_level(0)
             .level_count(texture.mip_levels.max(1))
             .base_array_layer(0)
-            .layer_count(1);
+            .layer_count(Self::copy_layer_count(texture));
         let barrier = vk::ImageMemoryBarrier2::default()
             .old_layout(old_layout)
             .new_layout(new_layout)
@@ -2197,23 +2192,47 @@ impl VulkanDevice {
 
         let layer_count = Self::copy_layer_count(texture);
         for level in 1..texture.mip_levels {
-            let range = vk::ImageSubresourceRange::default()
+            let mut barriers = Vec::with_capacity(2);
+
+            // If level > 1, the previous blit wrote to (level - 1). Synchronize that write for TRANSFER_READ.
+            if level > 1 {
+                let prev_range = vk::ImageSubresourceRange::default()
+                    .aspect_mask(aspect)
+                    .base_mip_level(level - 1)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(layer_count);
+                barriers.push(
+                    vk::ImageMemoryBarrier2::default()
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                        .image(texture.image)
+                        .subresource_range(prev_range),
+                );
+            }
+
+            let dst_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(aspect)
                 .base_mip_level(level)
                 .level_count(1)
                 .base_array_layer(0)
                 .layer_count(layer_count);
-            let barrier = vk::ImageMemoryBarrier2::default()
-                .old_layout(vk::ImageLayout::GENERAL)
-                .new_layout(vk::ImageLayout::GENERAL)
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .image(texture.image)
-                .subresource_range(range);
-            let dep =
-                vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&barrier));
+            barriers.push(
+                vk::ImageMemoryBarrier2::default()
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::empty())
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .image(texture.image)
+                    .subresource_range(dst_range),
+            );
+            let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
 
             let src_extent = vk::Extent3D {
                 width: (texture.width >> (level - 1)).max(1),
@@ -2286,7 +2305,7 @@ impl VulkanDevice {
             texture,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             vk::PipelineStageFlags2::TRANSFER,
-            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::TRANSFER_READ,
             vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_READ,
         );
@@ -2309,11 +2328,11 @@ impl VulkanDevice {
 
             if old_layout != vk::ImageLayout::TRANSFER_SRC_OPTIMAL {
                 let subresource_range = vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .aspect_mask(Self::image_aspect(texture))
                     .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
-                    .layer_count(1);
+                    .layer_count(Self::copy_layer_count(texture));
 
                 let (src_stage2, src_access2) = match old_layout {
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => (
@@ -2480,7 +2499,7 @@ impl VulkanDevice {
                 }
                 wait_res.map_err(|e| HalError::CommandError(e.to_string()))?;
 
-                // Acquire locks in standard order: pending_async_recorders THEN command_recorder_cache
+                // Acquire locks in standard order: pending_async_recorders THEN recorder cache
                 let current_val = self
                     .device
                     .get_semaphore_counter_value(self.internal_frame_semaphore)
@@ -2489,11 +2508,12 @@ impl VulkanDevice {
                     Ok(g) => g,
                     Err(p) => p.into_inner(),
                 };
-                let mut cache = match self.command_recorder_cache.lock() {
-                    Ok(g) => g,
-                    Err(p) => p.into_inner(),
-                };
                 for r in recorders {
+                    let cache_mutex = self.recorder_cache_for(r.queue_family_index);
+                    let mut cache = match cache_mutex.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
                     if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
                         cache.push((r.command_pool, r.command_buffer));
                     } else {
@@ -2504,6 +2524,11 @@ impl VulkanDevice {
                 pending.retain_mut(|(val, async_recorders)| {
                     if *val <= current_val {
                         for r in async_recorders.drain(..) {
+                            let cache_mutex = self.recorder_cache_for(r.queue_family_index);
+                            let mut cache = match cache_mutex.lock() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
                             if cache.len() < MAX_CACHED_COMMAND_RECORDERS {
                                 cache.push((r.command_pool, r.command_buffer));
                             } else {
