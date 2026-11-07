@@ -1,0 +1,13 @@
+[package]
+publish = false
+name = "example-greedy-mesher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Polygonal 3D voxel chunk meshing using Greedy Meshing and lgpu dynamic rendering with depth testing"
+
+[dependencies]
+lgpu = { path = "../../crates/lgpu" }
+winit = { version = "0.29", default-features = false, features = ["rwh_06", "x11", "wayland"] }
+bytemuck = { version = "1.19", features = ["derive"] }

@@ -49,6 +49,16 @@ const VOXEL_GOLD: u32   = 8u;
 const VOXEL_BRICK: u32  = 9u;
 
 // -------------------------------------------------------------
+// Bindless Storage Buffer for Interactive Voxel Sandbox (Mode 3)
+// -------------------------------------------------------------
+struct VoxelWorld {
+    voxels: array<u32>,
+};
+
+@group(0) @binding(0)
+var<storage, read> world_voxels: VoxelWorld;
+
+// -------------------------------------------------------------
 // Procedural Hash & Noise
 // -------------------------------------------------------------
 fn hash21(p: vec2<f32>) -> f32 {
@@ -99,6 +109,18 @@ fn get_voxel(pos: vec3<i32>, mode: u32) -> u32 {
     // Bounds limit for rendering performance
     if (y < 0 || y > 64) {
         return VOXEL_AIR;
+    }
+
+    if (mode == 3u) {
+        // --- Mode 3: Interactive Sandbox (GPU Storage Buffer) ---
+        if (x < -32 || x >= 32 || z < -32 || z >= 32 || y >= 64) {
+            return VOXEL_AIR;
+        }
+        let gx = u32(x + 32);
+        let gy = u32(y);
+        let gz = u32(z + 32);
+        let idx = gx + gz * 64u + gy * 4096u;
+        return world_voxels.voxels[idx];
     }
 
     if (mode == 0u) {

@@ -12,6 +12,7 @@ members = [
     "examples/06_voxel_renderer",
     "examples/07_textured_mesh",
     "examples/08_windowed_mesh",
+    "examples/09_greedy_mesher",
 ]
 
 [workspace.package]

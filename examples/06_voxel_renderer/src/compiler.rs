@@ -28,3 +28,15 @@ pub fn compile_wgsl_to_spirv(source: &str) -> Result<Vec<u32>, String> {
 
     Ok(words)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compile_voxel_shader() {
+        let src = include_str!("../shaders/voxel.wgsl");
+        let spv = compile_wgsl_to_spirv(src).expect("voxel.wgsl must compile cleanly");
+        assert!(!spv.is_empty());
+    }
+}

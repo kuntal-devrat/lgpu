@@ -364,6 +364,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-greedy-mesher"
+version = "0.1.6"
+dependencies = [
+ "bytemuck",
+ "lgpu",
+ "winit",
+]
+
+[[package]]
 name = "example-headless-compute"
 version = "0.1.6"
 dependencies = [
